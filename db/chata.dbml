@@ -1,0 +1,1174 @@
+// Chata — database schema (DBML for dbdiagram.io)
+// Derived from docs/specs/chata-database-design.md — source of truth คือเอกสารนั้น
+// ข้อจำกัด DBML: partial index / CHECK constraint / expression index เขียนไว้ใน Note ของตารางแทน
+// enum ทั้งหมดเป็น text + CHECK (ดู design doc 2.3) — ชุดค่าระบุใน note ของ column
+
+Project chata {
+  database_type: 'PostgreSQL'
+  Note: 'Chata v1 — 57 app tables + auth_users stub. Money tables ทั้งหมด RLS deny-all เขียนผ่าน RPC เท่านั้น; ledger เป็น append-only double-entry'
+}
+
+//======================================================================
+// supabase_managed
+//======================================================================
+
+Table auth_users {
+  id uuid [pk]
+  Note: 'STUB — ตาราง auth.users ของ Supabase (จัดการโดย Supabase Auth ไม่ใช่ของเรา) ใส่ไว้เพื่อให้เห็นจุดยึดของ account.id'
+}
+
+//======================================================================
+// 1. identity
+//======================================================================
+
+Table account {
+  id uuid [pk, note: 'FK -> auth.users(id)']
+  role text [not null, default: 'user', note: 'user | seer | admin']
+  status text [not null, default: 'active', note: 'active | suspended | deleted']
+  phone_e164 text [unique, note: 'สำเนาจาก auth (E.164)']
+  referral_code text [unique, note: 'โค้ดชวนเพื่อนของบัญชีนี้ 8 ตัว A-Z0-9']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'แถวคู่ขนาน auth.users 1:1 สร้างด้วย trigger — uuid นี้คือใคร บทบาทอะไร ยัง active ไหม; user กับ seer เป็นคนละบัญชี'
+}
+
+Table user_profile {
+  account_id uuid [pk]
+  display_name text [not null, note: 'length 1-50']
+  avatar_url text
+  birthdate date [note: 'PII']
+  gender text [note: 'male | female | other | undisclosed']
+  notify_message boolean [not null, default: true]
+  notify_seer_online boolean [not null, default: true]
+  notify_daily_horoscope boolean [not null, default: true]
+  referred_by_code text [note: 'เขียนได้ครั้งเดียวจาก NULL (trigger)']
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'ข้อมูลแสดงผล + preference ของ user; owner-read/owner-write'
+}
+
+Table profile_photo {
+  id uuid [pk, default: `gen_random_uuid()`]
+  account_id uuid [not null]
+  position smallint [not null, default: 0, note: 'CHECK 0-9']
+  object_key text [unique, not null, note: 'Storage bucket profile-photos']
+  moderation_status text [not null, default: 'pending', note: 'pending | approved | rejected']
+  deleted_at timestamptz [note: 'soft delete']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (account_id, position) [unique, name: 'profile_photo_account_position_key', note: 'จริงเป็น partial WHERE deleted_at IS NULL']
+  }
+  Note: 'รูปแกลเลอรี/โปรไฟล์ต่อบัญชี; partial unique (account_id, position) WHERE deleted_at IS NULL; index (account_id) WHERE deleted_at IS NULL'
+}
+
+Table seer_profile {
+  account_id uuid [pk]
+  display_name text [not null, note: 'length 1-50']
+  bio text [not null, default: '', note: 'length <= 2000']
+  avatar_url text
+  approval_status text [not null, default: 'draft', note: 'draft | submitted | approved | rejected']
+  is_active boolean [not null, default: false, note: 'เปิดรับงาน (seer สลับเอง)']
+  accepts_question boolean [not null, default: false]
+  accepts_appointment boolean [not null, default: false]
+  accepts_tip boolean [not null, default: false]
+  accepts_call_extension boolean [not null, default: true]
+  level_id integer [note: 'อัตราส่วนแบ่งมาจาก level']
+  rating_avg "numeric(3,2)" [note: 'projection จาก review CHECK 0-5']
+  rating_count integer [not null, default: 0, note: 'projection']
+  question_count integer [not null, default: 0, note: 'projection งานที่จบ']
+  main_skill_id integer [note: 'denorm เพื่อ card query']
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (approval_status, is_active) [name: 'seer_profile_discovery_idx']
+    main_skill_id [name: 'seer_profile_main_skill_idx']
+  }
+  Note: 'หมอดูคนนี้คือใคร สถานะ approve/เปิดรับงานเป็นแกนอิสระ ห้ามยุบเป็น enum เดียว; public-read เมื่อ approved; presence ไม่อยู่ในตาราง (Realtime Presence)'
+}
+
+Table device_token {
+  id uuid [pk, default: `gen_random_uuid()`]
+  account_id uuid [not null]
+  platform text [not null, note: 'ios | android']
+  provider text [not null, default: 'fcm', note: 'fcm | apns']
+  token text [unique, not null, note: 'push token — upsert ทับเมื่อย้ายเครื่อง/บัญชี']
+  is_enabled boolean [not null, default: true]
+  last_seen_at timestamptz [not null, default: `now()`]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'ส่ง push หาบัญชีนี้ที่ device ไหน; index (account_id) WHERE is_enabled'
+}
+
+Table agreement {
+  id integer [pk, increment]
+  code text [not null, note: 'tos | privacy | seer_terms']
+  version text [not null]
+  title text [not null]
+  content_url text [not null]
+  is_required boolean [not null, default: true]
+  effective_at timestamptz [not null]
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (code, version) [unique, name: 'agreement_code_version_key']
+  }
+  Note: 'เอกสารข้อตกลงต่อเวอร์ชัน; public-read'
+}
+
+Table account_agreement {
+  account_id uuid [not null]
+  agreement_id integer [not null]
+  accepted_at timestamptz [not null, default: `now()`]
+  indexes {
+    (account_id, agreement_id) [pk]
+  }
+  Note: 'หลักฐาน consent (PDPA) — append-only ห้าม UPDATE/DELETE'
+}
+
+Table account_deletion_request {
+  id uuid [pk, default: `gen_random_uuid()`]
+  account_id uuid [not null]
+  status text [not null, default: 'requested', note: 'requested | cancelled | processing | completed']
+  reason text
+  scheduled_purge_at timestamptz [not null, note: 'now()+7d grace period']
+  completed_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'คำขอลบบัญชี (PDPA); partial unique (account_id) WHERE status IN (requested,processing) — คำขอค้างทีละหนึ่ง'
+}
+
+//======================================================================
+// 2. seer_catalog
+//======================================================================
+
+Table seer_level {
+  id integer [pk, increment]
+  code text [unique, not null, note: 'standard | pro | master ...']
+  name text [not null]
+  revenue_share_bps integer [not null, note: 'ส่วนแบ่ง seer เป็น basis points CHECK 0-10000']
+  badge_url text
+  sort_order integer [not null, default: 0]
+  is_enabled boolean [not null, default: true]
+  Note: 'ระดับหมอดู + อัตราส่วนแบ่ง; settlement จะ snapshot bps ลง ledger เสมอ'
+}
+
+Table skill {
+  id integer [pk, increment]
+  name text [unique, not null]
+  icon_url text
+  sort_order integer [not null, default: 0]
+  is_enabled boolean [not null, default: true]
+  Note: 'ศาสตร์ดูดวงที่ระบบรู้จัก; public-read'
+}
+
+Table seer_skill {
+  seer_id uuid [not null]
+  skill_id integer [not null]
+  is_main boolean [not null, default: false]
+  indexes {
+    (seer_id, skill_id) [pk]
+    skill_id [name: 'seer_skill_skill_idx']
+  }
+  Note: 'หมอดูถนัดศาสตร์ไหน; partial unique (seer_id) WHERE is_main — main skill ได้หนึ่งเดียว'
+}
+
+Table service_type {
+  id integer [pk, increment]
+  code text [unique, not null, note: 'chat_question | voice_call | video_call']
+  consultation_mode text [not null, note: 'question | call — กำหนดว่า flow ลง question หรือ call_transaction']
+  name text [not null]
+  min_price_coin bigint [not null, default: 0]
+  max_price_coin bigint [not null, note: 'CHECK max >= min']
+  base_duration_seconds integer [note: 'call เท่านั้น: วินาทีต่อ 1 หน่วยราคา; NULL สำหรับ question']
+  is_enabled boolean [not null, default: true]
+  Note: 'รูปแบบบริการของระบบ + เพดานราคา'
+}
+
+Table seer_service {
+  id uuid [pk, default: `gen_random_uuid()`]
+  seer_id uuid [not null]
+  service_type_id integer [not null]
+  price_coin bigint [not null, note: 'CHECK >= 0; trigger ตรวจอยู่ในช่วง min/max ของ service_type']
+  is_enabled boolean [not null, default: false]
+  trial_quota_per_user smallint [not null, default: 0]
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (seer_id, service_type_id) [unique, name: 'seer_service_seer_type_key']
+  }
+  Note: 'แหล่งราคาเดียวของระบบ — RPC ฝั่งซื้ออ่านราคาจากแถวนี้เสมอ; index (seer_id) WHERE is_enabled'
+}
+
+Table seer_schedule {
+  id uuid [pk, default: `gen_random_uuid()`]
+  seer_id uuid [not null]
+  day_of_week smallint [not null, note: 'CHECK 0-6 (0=อาทิตย์)']
+  start_time time [not null, note: 'เวลาท้องถิ่นไทย (Asia/Bangkok คงที่)']
+  end_time time [not null, note: 'CHECK end_time > start_time']
+  indexes {
+    (seer_id, day_of_week, start_time) [unique, name: 'seer_schedule_slot_key']
+  }
+  Note: 'เวลาออนไลน์ประจำสัปดาห์ที่ seer ประกาศ (แสดงผล ไม่ใช่ enforcement)'
+}
+
+Table seer_document {
+  id uuid [pk, default: `gen_random_uuid()`]
+  seer_id uuid [not null]
+  document_type text [not null, note: 'national_id | bank_book | certificate | portrait | other']
+  object_key text [unique, not null, note: 'private bucket seer-documents']
+  review_status text [not null, default: 'pending', note: 'pending | approved | rejected']
+  reject_reason text
+  reviewed_by uuid
+  reviewed_at timestamptz
+  deleted_at timestamptz [note: 'soft delete ก่อน approve']
+  created_at timestamptz [not null, default: `now()`]
+  Note: 'เอกสารสมัคร/KYC — PII สูง owner-read เท่านั้น signed URL ผ่าน service role; index (seer_id) WHERE deleted_at IS NULL และ (review_status) WHERE pending'
+}
+
+Table favorite_seer {
+  user_id uuid [not null]
+  seer_id uuid [not null]
+  notify_online boolean [not null, default: false]
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (user_id, seer_id) [pk]
+  }
+  Note: 'user ติดตามหมอดู + ขอ push ตอนออนไลน์; partial index (seer_id) WHERE notify_online สำหรับ fan-out push; CHECK user_id <> seer_id'
+}
+
+//======================================================================
+// 3. consultation
+//======================================================================
+
+Table question {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [not null]
+  seer_id uuid [not null]
+  seer_service_id uuid [not null]
+  status text [not null, default: 'submitted', note: 'submitted | active | close_requested | completed | cancelled_refunded']
+  price_coin bigint [not null, note: 'snapshot ราคาตอนซื้อ CHECK >= 0']
+  is_trial boolean [not null, default: false]
+  close_requested_by uuid
+  close_requested_at timestamptz
+  cancel_reason text [note: 'user_cancel | seer_timeout | seer_reject | admin']
+  user_last_read_message_id bigint [not null, default: 0, note: 'read cursor ฝั่ง user']
+  seer_last_read_message_id bigint [not null, default: 0, note: 'read cursor ฝั่ง seer']
+  expires_at timestamptz [not null, note: 'เส้นตาย seer ตอบก่อน auto-refund']
+  completed_at timestamptz
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (user_id, created_at) [name: 'question_user_created_idx', note: 'created_at DESC']
+    (seer_id, status, created_at) [name: 'question_seer_status_idx', note: 'created_at DESC']
+  }
+  Note: 'aggregate หลักของ flow ถาม-ตอบ escrow coin จนงานจบ; CHECK user_id <> seer_id; partial index (expires_at) WHERE status IN (submitted,active); เขียนผ่าน RPC เท่านั้น (deny-all)'
+}
+
+Table question_message {
+  id bigint [pk, increment, note: 'keyset cursor']
+  question_id uuid [not null]
+  sender_id uuid [note: 'NULL = system message']
+  client_message_id uuid [not null, note: 'idempotency ฝั่ง client']
+  message_type text [not null, default: 'text', note: 'text | photo | audio | system']
+  content text [note: 'length <= 4000; NULL เมื่อเป็น media']
+  object_key text [note: 'storage path เมื่อ photo/audio']
+  system_event text [note: 'close_requested | close_confirmed | close_cancelled | refunded | expired_warning']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (question_id, client_message_id) [unique, name: 'question_message_client_key']
+    (question_id, id) [name: 'question_message_cursor_idx']
+  }
+  Note: 'บทสนทนาในคำถาม — ตารางโตเร็วสุดของระบบ; CHECK (photo/audio) = (object_key NOT NULL); insert ตรงผ่าน RLS ได้เมื่อเป็น participant + state ยังเปิด'
+}
+
+Table review {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [not null]
+  seer_id uuid [not null]
+  question_id uuid [note: 'unique WHERE NOT NULL — งานละหนึ่งรีวิว']
+  call_transaction_id uuid [note: 'unique WHERE NOT NULL']
+  rating smallint [not null, note: 'CHECK 1-5']
+  comment text [note: 'length <= 1000']
+  tag_ids "integer[]" [not null, default: '{}', note: 'อ้าง review_tag.id — array แทน join table (GIN index) validate ใน RPC']
+  tip_coin bigint [not null, default: 0, note: 'ทิปแนบรีวิว — post ledger ใน RPC เดียวกัน']
+  seer_reply text [note: 'length <= 1000']
+  seer_replied_at timestamptz
+  is_hidden boolean [not null, default: false, note: 'moderation ซ่อน']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'รีวิว+ดาว+ทิปต่อหนึ่งงาน; CHECK ผูก question หรือ call อย่างใดอย่างหนึ่งเป๊ะ; partial index (seer_id, created_at DESC) WHERE NOT is_hidden; GIN (tag_ids)'
+}
+
+Table review_tag {
+  id integer [pk, increment]
+  label text [unique, not null]
+  sentiment text [not null, default: 'positive', note: 'positive | negative']
+  sort_order integer [not null, default: 0]
+  is_enabled boolean [not null, default: true]
+  Note: 'แท็กที่เลือกได้ตอนรีวิว; public-read'
+}
+
+//======================================================================
+// 4. appointment
+//======================================================================
+
+Table appointment_room {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [not null]
+  seer_id uuid [not null]
+  user_last_read_message_id bigint [not null, default: 0]
+  seer_last_read_message_id bigint [not null, default: 0]
+  last_message_at timestamptz [note: 'denorm เรียง inbox']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (user_id, seer_id) [unique, name: 'appointment_room_pair_key']
+    (user_id, last_message_at) [name: 'appointment_room_user_inbox_idx']
+    (seer_id, last_message_at) [name: 'appointment_room_seer_inbox_idx']
+  }
+  Note: 'ห้องนัดหมายถาวรต่อคู่ user-seer (แชทฟรี ไม่แตะเงิน); CHECK user_id <> seer_id'
+}
+
+Table appointment {
+  id uuid [pk, default: `gen_random_uuid()`]
+  room_id uuid [not null]
+  proposed_by uuid [not null]
+  scheduled_at timestamptz [not null, note: 'CHECK > created_at']
+  status text [not null, default: 'pending', note: 'pending | accepted | denied | cancelled']
+  responded_by uuid [note: 'ต้อง <> proposed_by (ตรวจใน RPC)']
+  responded_at timestamptz
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (room_id, created_at) [name: 'appointment_room_created_idx']
+  }
+  Note: 'ข้อเสนอนัดเวลา; partial unique (room_id) WHERE status=pending — ค้างได้ทีละหนึ่ง; partial index (scheduled_at) WHERE status=accepted สำหรับ reminder'
+}
+
+Table appointment_message {
+  id bigint [pk, increment]
+  room_id uuid [not null]
+  sender_id uuid [note: 'NULL = system']
+  client_message_id uuid [not null]
+  content text [not null, note: 'length 1-2000']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (room_id, client_message_id) [unique, name: 'appointment_message_client_key']
+    (room_id, id) [name: 'appointment_message_cursor_idx']
+  }
+  Note: 'แชทตกลงเวลา (text เท่านั้น) — insert ตรงผ่าน RLS เมื่อเป็น participant'
+}
+
+//======================================================================
+// 5. call
+//======================================================================
+
+Table call_transaction {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [not null]
+  seer_id uuid [not null]
+  seer_service_id uuid [not null]
+  call_kind text [not null, note: 'voice | video (snapshot จาก service_type)']
+  status text [not null, default: 'reserved', note: 'reserved | offered | accepted | active | completed | cancelled | rejected | expired | failed']
+  reserved_coin bigint [not null, note: 'escrow ตอนจอง CHECK >= 0']
+  charged_coin bigint [not null, default: 0, note: 'ยอด settle รวม extension CHECK >= 0']
+  base_duration_seconds integer [not null]
+  total_duration_seconds integer [not null, default: 0]
+  is_trial boolean [not null, default: false]
+  end_reason text [note: 'user_end | seer_end | timeout | media_failure | admin']
+  offered_at timestamptz
+  accepted_at timestamptz
+  started_at timestamptz
+  ended_at timestamptz
+  reservation_expires_at timestamptz [not null, note: 'เส้นตาย seer รับสาย']
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (user_id, created_at) [name: 'call_user_created_idx']
+    (seer_id, status, created_at) [name: 'call_seer_status_idx']
+  }
+  Note: 'authority ของ call state (Realtime = signaling เท่านั้น); CHECK user_id <> seer_id; partial: (reservation_expires_at) WHERE reserved/offered, (status) WHERE active, unique (user_id) WHERE สายเป็นๆ, unique (seer_id) WHERE accepted/active — กันโทรซ้อน; deny-all เขียนผ่าน RPC'
+}
+
+Table call_extension {
+  id uuid [pk, default: `gen_random_uuid()`]
+  call_transaction_id uuid [not null]
+  sequence_no integer [not null, note: 'CHECK > 0']
+  duration_seconds integer [not null, note: 'CHECK > 0']
+  coin_amount bigint [not null, note: 'CHECK > 0 snapshot ราคาตอนต่อ']
+  status text [not null, default: 'charged', note: 'charged | reversed — insert เกิดหลัง charge สำเร็จเสมอ']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (call_transaction_id, sequence_no) [unique, name: 'call_extension_sequence_key']
+  }
+  Note: 'การต่อเวลาสาย — idempotency ระดับบัญชีที่ unique sequence'
+}
+
+Table media_session {
+  call_transaction_id uuid [pk]
+  provider text [not null, note: 'livekit | agora | twilio']
+  room_name text [unique, not null]
+  user_token_issued_at timestamptz [note: 'audit การออก token']
+  seer_token_issued_at timestamptz
+  expires_at timestamptz [not null]
+  created_at timestamptz [not null, default: `now()`]
+  Note: 'ห้อง media ของ provider (1:1 กับ call); deny-all — token mint ผ่าน Edge media-token; ไม่เก็บตัว JWT'
+}
+
+//======================================================================
+// 6. wallet_ledger  (RLS deny-all ทั้งกลุ่ม — อ่านผ่าน view v_my_*)
+//======================================================================
+
+Table wallet {
+  account_id uuid [pk]
+  available_coin bigint [not null, default: 0, note: 'CHECK >= 0']
+  reserved_coin bigint [not null, default: 0, note: 'CHECK >= 0']
+  payable_coin bigint [not null, default: 0, note: 'CHECK >= 0; ใช้เฉพาะ seer']
+  version integer [not null, default: 1]
+  updated_at timestamptz [not null, default: `now()`]
+  created_at timestamptz [not null, default: `now()`]
+  Note: 'balance projection — maintain ใน txn เดียวกับ ledger; แถวนี้คือ row-lock serialization point ของทุก financial RPC'
+}
+
+Table ledger_transaction {
+  id uuid [pk, default: `gen_random_uuid()`]
+  reference_type text [not null, note: 'payment_order | question | call_transaction | call_extension | voucher_redemption | referral_attribution | gift_transaction | ai_reading_session | payout_request | review | manual_adjustment']
+  reference_id text [not null]
+  operation text [not null, note: 'credit_purchase | reserve | settle | refund | tip | gift | redeem | referral_bonus | ai_charge | payout | reversal | adjustment']
+  reversal_of uuid [note: 'unique WHERE NOT NULL — กลับรายการได้ครั้งเดียว']
+  note text [note: 'admin adjustment ต้องใส่']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (reference_type, reference_id, operation) [unique, name: 'ledger_tx_business_ref_key']
+  }
+  Note: 'หัว double-entry หนึ่งเหตุการณ์ธุรกิจ; unique business ref = idempotency ระดับบัญชี; append-only'
+}
+
+Table ledger_entry {
+  id bigint [pk, increment]
+  transaction_id uuid [not null]
+  ledger_account text [not null, note: 'user_available | user_reserved | seer_payable | platform_revenue | platform_promotion | coin_supply']
+  account_id uuid [note: 'เจ้าของบัญชีย่อย; NULL = บัญชี system']
+  amount bigint [not null, note: 'coin; + เข้า - ออก; CHECK <> 0; SUM ต่อ transaction = 0 (deferred constraint trigger)']
+  balance_after bigint [note: 'snapshot หลัง post เฉพาะบัญชีที่มี wallet']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    transaction_id [name: 'ledger_entry_tx_idx']
+  }
+  Note: 'ขา debit/credit; partial index (account_id, id DESC) WHERE account_id IS NOT NULL — coin history; CHECK per-account = (account_id NOT NULL); append-only'
+}
+
+Table idempotency_key {
+  account_id uuid [not null]
+  operation text [not null, note: 'ชื่อ RPC']
+  key uuid [not null, note: 'client สร้างต่อ 1 intent']
+  request_hash bytea [not null, note: 'SHA-256 ของ input']
+  response jsonb
+  status text [not null, default: 'in_progress', note: 'in_progress | succeeded | failed']
+  created_at timestamptz [not null, default: `now()`]
+  expires_at timestamptz [not null, note: 'now()+24h — cron purge']
+  indexes {
+    (account_id, operation, key) [pk]
+    expires_at [name: 'idempotency_key_expiry_idx']
+  }
+  Note: 'idempotency ชั้น API — key ชน + hash ตรง = คืน response เดิม; hash ไม่ตรง = 409'
+}
+
+//======================================================================
+// 7. payment  (deny-all ยกเว้น coin_package)
+//======================================================================
+
+Table coin_package {
+  id uuid [pk, default: `gen_random_uuid()`]
+  code text [unique, not null]
+  coin_amount bigint [not null, note: 'CHECK > 0']
+  bonus_coin bigint [not null, default: 0, note: 'โพสต์แยกขาจาก platform_promotion']
+  price_minor bigint [not null, note: 'satang CHECK > 0']
+  currency "char(3)" [not null, default: 'THB']
+  apple_product_id text [note: 'unique WHERE NOT NULL']
+  google_product_id text [note: 'unique WHERE NOT NULL — แยก column เพราะ price tier คนละชุด']
+  allowed_methods "text[]" [not null, note: 'ซับเซ็ตของ payment_order.method — package ผูกกับวิธีจ่าย ไม่ใช่ PSP']
+  sort_order integer [not null, default: 0]
+  is_enabled boolean [not null, default: true]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'แพ็กเกจเติม coin; public-read เมื่อ is_enabled'
+}
+
+Table payment_order {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id uuid [not null]
+  coin_package_id uuid [not null]
+  method text [not null, note: 'วิธีจ่ายที่ user เลือก: apple_iap | google_play | bank_transfer | promptpay | card | truemoney | linepay | internet_banking']
+  psp_code text [not null, note: 'ใครเคลียร์เงิน: apple | google | chillpay | siampay | mol | epos | omise | manual — คู่ (method,psp) validate ผ่าน app_config payment.method_psp_matrix']
+  status text [not null, default: 'created', note: 'created | pending_provider | verified | credited | failed | expired | refunded']
+  coin_amount bigint [not null, note: 'snapshot']
+  bonus_coin bigint [not null, default: 0, note: 'snapshot']
+  price_minor bigint [not null, note: 'snapshot satang']
+  currency "char(3)" [not null, default: 'THB']
+  psp_reference text [note: 'order/charge id ฝั่ง PSP; unique (psp_code, psp_reference) WHERE NOT NULL']
+  referral_code_used text [note: 'จุด referral bonus ตอน credit ครั้งแรก']
+  failure_reason text
+  expires_at timestamptz [not null]
+  credited_at timestamptz
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (user_id, created_at) [name: 'payment_order_user_idx']
+    (psp_code, status, created_at) [name: 'payment_order_psp_idx', note: 'reconcile ราย PSP']
+  }
+  Note: 'ความพยายามเติมเงินหนึ่งครั้ง; credited เกิดพร้อม ledger post ใน txn เดียวเสมอ; partial index (status, expires_at) WHERE created/pending_provider'
+}
+
+Table iap_receipt {
+  id uuid [pk, default: `gen_random_uuid()`]
+  payment_order_id uuid [not null]
+  provider text [not null, note: 'apple_iap | google_play']
+  store_product_id text [not null]
+  provider_transaction_id text [not null, note: 'Apple: original_transaction_id; Google: order_id']
+  purchase_token_hash bytea [not null, note: 'SHA-256 ของ Apple JWS / Google purchase_token — ไม่เก็บดิบ']
+  raw_payload jsonb [not null, note: 'decoded receipt ที่ verify แล้ว']
+  verified_at timestamptz [not null, default: `now()`]
+  consumed_at timestamptz [note: 'acknowledge/consume ฝั่ง store สำเร็จ']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (provider, purchase_token_hash) [unique, name: 'iap_receipt_token_key', note: 'กัน replay purchase token']
+    (provider, provider_transaction_id) [unique, name: 'iap_receipt_tx_key']
+  }
+  Note: 'หลักฐานซื้อ IAP สอง store คนละ format แต่ replay guard ตรรกะเดียวกัน'
+}
+
+Table bank_transfer_proof {
+  payment_order_id uuid [pk]
+  bank_code text [not null, note: 'จาก app_config payment.banks']
+  object_key text [unique, not null, note: 'private bucket payment-proofs']
+  content_hash bytea [unique, not null, note: 'SHA-256 — สลิปซ้ำใช้ไม่ได้']
+  review_status text [not null, default: 'pending', note: 'pending | approved | rejected']
+  reject_reason text
+  reviewed_by uuid
+  reviewed_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  Note: 'สลิปโอน (PII) 1:1 กับ order; partial index (review_status) WHERE pending — คิว admin'
+}
+
+Table payment_webhook_event {
+  psp_code text [not null, note: 'ชุดเดียวกับ payment_order.psp_code (apple = ASN v2, google = RTDN)']
+  event_id text [not null, note: 'id ฝั่ง PSP']
+  event_type text [not null]
+  payload_hash bytea [not null]
+  payload jsonb [not null, note: 'verify signature แล้ว redact ก่อนเก็บ']
+  processing_result text [not null, note: 'processed | ignored | error']
+  processed_at timestamptz [not null, default: `now()`]
+  indexes {
+    (psp_code, event_id) [pk]
+  }
+  Note: 'replay guard + audit ของ callback — insert ก่อนประมวลผล ชน PK = เคยรับแล้ว; append-only'
+}
+
+//======================================================================
+// 8. promotion
+//======================================================================
+
+Table voucher {
+  id uuid [pk, default: `gen_random_uuid()`]
+  code_hash bytea [unique, not null, note: 'SHA-256(upper(code)) — ไม่เก็บ plaintext']
+  code_hint text [not null, note: '4 ตัวท้าย']
+  campaign text [not null, note: 'จัดกลุ่มแทนตาราง batch']
+  coin_amount bigint [not null, note: 'CHECK > 0']
+  max_redemptions integer [not null, default: 1]
+  redeemed_count integer [not null, default: 0, note: 'CHECK <= max_redemptions']
+  per_user_limit smallint [not null, default: 1]
+  status text [not null, default: 'active', note: 'active | disabled']
+  valid_from timestamptz [not null, default: `now()`]
+  valid_until timestamptz [not null]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    campaign [name: 'voucher_campaign_idx']
+  }
+  Note: 'โค้ดแจก coin (single-use และ campaign multi-use ในแถวเดียวกัน); deny-all — redeem ผ่าน RPC'
+}
+
+Table voucher_redemption {
+  id uuid [pk, default: `gen_random_uuid()`]
+  voucher_id uuid [not null]
+  account_id uuid [not null]
+  coin_amount bigint [not null, note: 'snapshot']
+  redeemed_at timestamptz [not null, default: `now()`]
+  indexes {
+    (voucher_id, account_id) [unique, name: 'voucher_redemption_once_key', note: 'กันชั้น DB สำหรับ per_user_limit=1; limit>1 ตรวจใน RPC']
+  }
+  Note: 'ใคร redeem ใบไหน — append-only; ledger ref: (voucher_redemption, id, redeem)'
+}
+
+Table referral_attribution {
+  id uuid [pk, default: `gen_random_uuid()`]
+  referrer_id uuid [not null]
+  referee_id uuid [unique, not null, note: 'ถูกชวนได้ครั้งเดียวในชีวิต']
+  referral_code text [not null, note: 'snapshot']
+  status text [not null, default: 'attributed', note: 'attributed | rewarded | voided']
+  referrer_bonus_coin bigint
+  referee_bonus_coin bigint
+  rewarded_at timestamptz
+  qualifying_payment_order_id uuid [note: 'order แรกที่เข้าเงื่อนไข']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (referrer_id, created_at) [name: 'referral_referrer_idx']
+  }
+  Note: 'ใครชวนใคร โบนัสจ่ายเมื่อ referee เติมเงินแรก (กัน fraud); CHECK referrer <> referee'
+}
+
+//======================================================================
+// 9. seer_earning_payout
+//======================================================================
+
+Table seer_earning {
+  id bigint [pk, increment]
+  seer_id uuid [not null]
+  source_type text [not null, note: 'question | call | call_extension | tip | gift']
+  source_id text [not null]
+  gross_coin bigint [not null, note: 'CHECK > 0']
+  seer_coin bigint [not null, note: 'CHECK >= 0 AND <= gross_coin']
+  revenue_share_bps integer [not null, note: 'snapshot อัตรา ณ ตอน settle']
+  ledger_transaction_id uuid [not null, note: 'โยงหลักฐานบัญชี']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (source_type, source_id) [unique, name: 'seer_earning_source_key']
+    (seer_id, created_at) [name: 'seer_earning_history_idx']
+  }
+  Note: 'reporting projection ของรายได้ (เขียนใน txn เดียวกับ settle) — source of truth คือ ledger; owner-read; append-only'
+}
+
+Table payout_account {
+  id uuid [pk, default: `gen_random_uuid()`]
+  seer_id uuid [not null]
+  bank_code text [not null]
+  account_number_encrypted bytea [not null, note: 'pgsodium/Vault']
+  account_number_last4 text [not null]
+  account_holder_name text [not null, note: 'ต้องตรง KYC']
+  verify_status text [not null, default: 'pending', note: 'pending | verified | rejected']
+  deleted_at timestamptz [note: 'soft delete — audit payout เก่า']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'บัญชีธนาคารรับเงินของ seer (PII); partial unique (seer_id) WHERE deleted_at IS NULL — active ทีละหนึ่ง; client เห็นเฉพาะ last4 ผ่าน view'
+}
+
+Table payout_request {
+  id uuid [pk, default: `gen_random_uuid()`]
+  seer_id uuid [not null]
+  payout_account_id uuid [not null, note: 'snapshot ปลายทาง']
+  coin_amount bigint [not null, note: 'CHECK > 0']
+  fiat_amount_minor bigint [not null, note: 'satang = coin*rate - fee - withholding']
+  conversion_rate_micro bigint [not null, note: 'satang ต่อ coin x 10^6 (snapshot)']
+  fee_minor bigint [not null, default: 0]
+  withholding_tax_minor bigint [not null, default: 0]
+  currency "char(3)" [not null, default: 'THB']
+  status text [not null, default: 'requested', note: 'requested | approved | paid | rejected | cancelled']
+  provider_reference text [note: 'เลขที่โอน/batch ขาออก']
+  reject_reason text
+  reviewed_by uuid
+  paid_at timestamptz
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (seer_id, created_at) [name: 'payout_request_history_idx']
+  }
+  Note: 'คำขอถอน — ledger หัก payable ตั้งแต่ requested (กันถอนซ้อน) reject/cancel = reversing; partial unique (seer_id) WHERE requested/approved; partial index (status) WHERE requested/approved'
+}
+
+//======================================================================
+// 10. horoscope_ai
+//======================================================================
+
+Table birth_profile {
+  id uuid [pk, default: `gen_random_uuid()`]
+  account_id uuid [not null]
+  label text [not null, note: 'length 1-50 เช่น ตัวเอง/แม่']
+  is_self boolean [not null, default: false]
+  birth_date date [not null]
+  birth_time time [note: 'NULL = ไม่ทราบเวลาเกิด']
+  birth_time_known boolean [not null, default: false]
+  birth_place text
+  latitude "numeric(9,6)"
+  longitude "numeric(9,6)"
+  gender text [note: 'male | female | other']
+  zodiac_sign text [not null, note: 'aries..pisces — trigger คำนวณจาก birth_date']
+  chinese_zodiac text [note: 'นักษัตร 12 ค่า']
+  deleted_at timestamptz [note: 'soft delete']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'ข้อมูลดวงกำเนิด (PII อ่อนไหว) owner-only; partial unique (account_id) WHERE is_self AND deleted_at IS NULL; trigger จำกัด <= 10 โปรไฟล์/บัญชี'
+}
+
+Table horoscope_content {
+  id uuid [pk, default: `gen_random_uuid()`]
+  content_type text [not null, note: 'daily | weekly | monthly']
+  zodiac_sign text [not null, note: '12 ราศี หรือ all']
+  for_date date [not null, note: 'วันที่ หรือวันแรกของช่วง']
+  title text [not null]
+  body jsonb [not null, note: '{overall, love, work, finance, lucky_number, lucky_color}']
+  author_type text [not null, default: 'ai', note: 'ai | editorial']
+  status text [not null, default: 'draft', note: 'draft | published | archived']
+  published_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (content_type, zodiac_sign, for_date) [unique, name: 'horoscope_content_slot_key']
+  }
+  Note: 'คำทำนายสำเร็จรูปต่อราศี — ต้นทุน AI คงที่ต่อวันไม่โตตาม user; public-read เมื่อ published'
+}
+
+Table ai_reading_session {
+  id uuid [pk, default: `gen_random_uuid()`]
+  account_id uuid [not null]
+  birth_profile_id uuid
+  topic text [not null, note: 'overall | love | career | finance | health | custom']
+  status text [not null, default: 'created', note: 'created | generating | completed | failed']
+  charge_type text [not null, note: 'free_quota | coin']
+  price_coin bigint [not null, default: 0, note: 'CHECK (charge_type=coin) = (price_coin > 0)']
+  provider text [note: 'AI provider ที่ใช้']
+  model text
+  input_tokens integer
+  output_tokens integer
+  cost_micro_usd bigint [note: 'ต้นทุน provider (micro-USD)']
+  error_code text
+  completed_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (account_id, created_at) [name: 'ai_session_history_idx']
+  }
+  Note: 'AI ดูดวงหนึ่ง session + usage/cost tracking; failed ที่จ่าย coin = refund อัตโนมัติ; partial index (status, created_at) WHERE created/generating'
+}
+
+Table ai_reading_message {
+  id bigint [pk, increment]
+  session_id uuid [not null]
+  role text [not null, note: 'user | assistant']
+  content text [not null, note: 'length <= 20000']
+  prompt_version text [note: 'อ้างเวอร์ชัน system prompt (ตัว prompt อยู่ใน repo)']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (session_id, id) [name: 'ai_message_cursor_idx']
+  }
+  Note: 'บทสนทนา/ผลคำทำนายใน session; เขียนผ่าน RPC/Edge เท่านั้น'
+}
+
+Table ai_usage_quota {
+  account_id uuid [not null]
+  quota_date date [not null, note: 'วันตาม Asia/Bangkok']
+  free_used smallint [not null, default: 0]
+  paid_used smallint [not null, default: 0]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (account_id, quota_date) [pk]
+  }
+  Note: 'counter สิทธิ์ AI ต่อวัน — atomic upsert-increment เทียบ cap จาก app_config; purge > 90 วัน'
+}
+
+//======================================================================
+// 11. live_gift  (feature flag: feature.live_enabled — ตัดทั้ง context ได้)
+//======================================================================
+
+Table live_room {
+  id uuid [pk, default: `gen_random_uuid()`]
+  seer_id uuid [not null]
+  title text [not null, note: 'length 1-100']
+  cover_url text
+  status text [not null, default: 'scheduled', note: 'scheduled | live | ended | cancelled']
+  provider text [note: 'livekit | agora | mux — NULL จน start']
+  provider_room_name text [note: 'unique WHERE NOT NULL']
+  scheduled_at timestamptz
+  started_at timestamptz
+  ended_at timestamptz
+  peak_viewer_count integer [not null, default: 0, note: 'sample จาก Presence']
+  total_gift_coin bigint [not null, default: 0, note: 'projection อัปเดตใน send_gift']
+  version integer [not null, default: 1]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (seer_id, created_at) [name: 'live_room_seer_idx']
+  }
+  Note: 'metadata ห้องไลฟ์ (วิดีโออยู่ provider, แชทเป็น broadcast ephemeral ไม่ persist); partial unique (seer_id) WHERE scheduled/live; partial index (status, started_at DESC) WHERE live'
+}
+
+Table gift {
+  id integer [pk, increment]
+  code text [unique, not null]
+  name text [not null]
+  asset_url text [not null]
+  price_coin bigint [not null, note: 'CHECK > 0']
+  sort_order integer [not null, default: 0]
+  is_enabled boolean [not null, default: true]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'catalog ของขวัญ; public-read เมื่อ is_enabled'
+}
+
+Table gift_transaction {
+  id bigint [pk, increment]
+  live_room_id uuid [not null]
+  sender_id uuid [not null]
+  seer_id uuid [not null, note: 'denorm จากห้อง — รายงาน/RLS ไม่ต้อง join']
+  gift_id integer [not null]
+  quantity integer [not null, default: 1, note: 'CHECK 1-99']
+  total_coin bigint [not null, note: 'snapshot price x quantity CHECK > 0']
+  client_gift_id uuid [not null]
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (sender_id, client_gift_id) [unique, name: 'gift_tx_client_key']
+    (live_room_id, id) [name: 'gift_tx_room_feed_idx']
+    (seer_id, created_at) [name: 'gift_tx_seer_income_idx']
+  }
+  Note: 'gift ในไลฟ์ ledger-backed settle ทันที (ไม่มี escrow); append-only; public-read (gift feed)'
+}
+
+//======================================================================
+// 12. notification_outbox
+//======================================================================
+
+Table notification_inbox {
+  id bigint [pk, increment]
+  account_id uuid [not null]
+  notification_type text [not null, note: 'message | question_update | appointment | call | coin_credited | payout | system | live_started | horoscope']
+  title text [not null]
+  body text [not null]
+  deep_link text [note: 'platform-neutral เช่น chata://question/{uuid}']
+  payload jsonb [not null, default: '{}', note: 'aggregate id/version สำหรับ client reconcile']
+  read_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (account_id, id) [name: 'notification_inbox_cursor_idx']
+  }
+  Note: 'กระดิ่งต่อบัญชี; partial index (account_id) WHERE read_at IS NULL — badge; owner แก้ได้เฉพาะ read_at; retention 90/180 วัน'
+}
+
+Table outbox_event {
+  id bigint [pk, increment]
+  aggregate_type text [not null]
+  aggregate_id text [not null]
+  event_type text [not null, note: 'เช่น question.message.created, payment.credited']
+  payload jsonb [not null, note: 'ห้ามมี token/secret/เนื้อความส่วนตัวเต็ม']
+  status text [not null, default: 'pending', note: 'pending | processing | published | dead']
+  attempts smallint [not null, default: 0, note: 'dead เมื่อ >= 8']
+  next_attempt_at timestamptz [not null, default: `now()`, note: 'exponential backoff 2^attempts x 10s']
+  last_error text
+  published_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (aggregate_type, aggregate_id) [name: 'outbox_aggregate_idx']
+  }
+  Note: 'transactional outbox — insert ใน txn เดียวกับ domain change; partial index (next_attempt_at) WHERE pending/processing — dispatcher claim ด้วย SKIP LOCKED; published > 14 วัน purge'
+}
+
+//======================================================================
+// 13. config_ops
+//======================================================================
+
+Table app_config {
+  key text [pk, note: 'เช่น feature.live_enabled, ai.free_quota_per_day, payment.method_psp_matrix, payout.conversion_rate_micro']
+  value jsonb [not null]
+  is_public boolean [not null, default: false, note: 'true = client อ่านได้ (bootstrap)']
+  description text [not null]
+  updated_at timestamptz [not null, default: `now()`]
+  Note: 'config + feature flag ฝั่ง server; RPC อ่านผ่าน get_config()'
+}
+
+Table rate_limit_counter {
+  subject text [not null, note: 'acct:<uuid> หรือ ip:<addr>']
+  bucket text [not null, note: 'financial | consultation_write | standard_write | auth_abuse | ai | gift']
+  window_start timestamptz [not null, note: 'ปัดลงเป็นนาที (fixed window)']
+  count integer [not null, default: 1]
+  indexes {
+    (subject, bucket, window_start) [pk]
+    window_start [name: 'rate_limit_purge_idx']
+  }
+  Note: 'rate limit บนตาราง (ไม่มี Redis) — upsert-increment ที่ต้นทุก write RPC; purge > 1 วัน'
+}
+
+//======================================================================
+// 14. moderation_audit
+//======================================================================
+
+Table block_relation {
+  seer_id uuid [not null]
+  user_id uuid [not null]
+  reason text
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (seer_id, user_id) [pk]
+    user_id [name: 'block_relation_user_idx']
+  }
+  Note: 'seer block user (ทิศเดียว); user ไม่เห็นว่าถูก block — ผลโผล่เป็น error ตอนซื้อ; CHECK seer_id <> user_id'
+}
+
+Table user_report {
+  id uuid [pk, default: `gen_random_uuid()`]
+  reporter_id uuid [not null]
+  target_type text [not null, note: 'account | question | review | live_room']
+  target_id text [not null]
+  reason text [not null, note: 'inappropriate | scam | harassment | spam | other']
+  detail text [note: 'length <= 2000']
+  evidence jsonb [not null, default: '{}', note: 'snapshot จาก client เช่นข้อความไลฟ์ที่เป็น ephemeral']
+  status text [not null, default: 'open', note: 'open | reviewing | actioned | dismissed']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  indexes {
+    (reporter_id, target_type, target_id) [unique, name: 'user_report_once_key']
+  }
+  Note: 'คำร้อง report; partial index (status, created_at) WHERE open/reviewing — คิวทีม'
+}
+
+Table moderation_action {
+  id uuid [pk, default: `gen_random_uuid()`]
+  target_account_id uuid [not null]
+  action_type text [not null, note: 'warn | suspend | unsuspend | hide_content | live_ban | debt_flag']
+  scope_type text [note: 'live_room | review | question']
+  scope_id text
+  reason text [not null]
+  user_report_id uuid [note: 'action นี้มาจาก report ไหน']
+  expires_at timestamptz [note: 'โทษชั่วคราว']
+  revoked_at timestamptz
+  created_by uuid [note: 'admin']
+  created_at timestamptz [not null, default: `now()`]
+  Note: 'การลงโทษ/แทรกแซงโดยแพลตฟอร์ม; partial index (target_account_id) WHERE revoked_at IS NULL; deny-all'
+}
+
+Table audit_log {
+  id bigint [pk, increment]
+  actor_type text [not null, note: 'user | seer | admin | system']
+  actor_id uuid [note: 'NULL = system']
+  action text [not null, note: 'เช่น payout.approved, config.changed, deletion.purged']
+  target_type text
+  target_id text
+  detail jsonb [not null, default: '{}', note: 'redact PII ตามนโยบาย']
+  created_at timestamptz [not null, default: `now()`]
+  indexes {
+    (target_type, target_id, created_at) [name: 'audit_log_target_idx']
+    (actor_id, created_at) [name: 'audit_log_actor_idx']
+  }
+  Note: 'เหตุการณ์สำคัญเชิงระบบ/แอดมิน (เงินมี ledger เป็น audit อยู่แล้ว); append-only; > 1 ปี export แล้วลบ'
+}
+
+//======================================================================
+// Refs
+//======================================================================
+
+// identity
+Ref: account.id - auth_users.id [delete: cascade]
+Ref: user_profile.account_id - account.id [delete: cascade]
+Ref: profile_photo.account_id > account.id [delete: cascade]
+Ref: seer_profile.account_id - account.id [delete: cascade]
+Ref: seer_profile.level_id > seer_level.id [delete: set null]
+Ref: seer_profile.main_skill_id > skill.id [delete: set null]
+Ref: device_token.account_id > account.id [delete: cascade]
+Ref: account_agreement.account_id > account.id [delete: cascade]
+Ref: account_agreement.agreement_id > agreement.id [delete: restrict]
+Ref: account_deletion_request.account_id > account.id [delete: cascade]
+
+// seer catalog
+Ref: seer_skill.seer_id > seer_profile.account_id [delete: cascade]
+Ref: seer_skill.skill_id > skill.id [delete: restrict]
+Ref: seer_service.seer_id > seer_profile.account_id [delete: cascade]
+Ref: seer_service.service_type_id > service_type.id [delete: restrict]
+Ref: seer_schedule.seer_id > seer_profile.account_id [delete: cascade]
+Ref: seer_document.seer_id > seer_profile.account_id [delete: cascade]
+Ref: seer_document.reviewed_by > account.id [delete: set null]
+Ref: favorite_seer.user_id > account.id [delete: cascade]
+Ref: favorite_seer.seer_id > account.id [delete: cascade]
+
+// consultation
+Ref: question.user_id > account.id [delete: restrict]
+Ref: question.seer_id > account.id [delete: restrict]
+Ref: question.seer_service_id > seer_service.id [delete: restrict]
+Ref: question.close_requested_by > account.id
+Ref: question_message.question_id > question.id [delete: cascade]
+Ref: question_message.sender_id > account.id [delete: set null]
+Ref: review.user_id > account.id [delete: cascade]
+Ref: review.seer_id > account.id [delete: cascade]
+Ref: review.question_id > question.id [delete: set null]
+Ref: review.call_transaction_id > call_transaction.id [delete: set null]
+
+// appointment
+Ref: appointment_room.user_id > account.id [delete: cascade]
+Ref: appointment_room.seer_id > account.id [delete: cascade]
+Ref: appointment.room_id > appointment_room.id [delete: cascade]
+Ref: appointment.proposed_by > account.id
+Ref: appointment.responded_by > account.id
+Ref: appointment_message.room_id > appointment_room.id [delete: cascade]
+Ref: appointment_message.sender_id > account.id [delete: set null]
+
+// call
+Ref: call_transaction.user_id > account.id [delete: restrict]
+Ref: call_transaction.seer_id > account.id [delete: restrict]
+Ref: call_transaction.seer_service_id > seer_service.id [delete: restrict]
+Ref: call_extension.call_transaction_id > call_transaction.id [delete: cascade]
+Ref: media_session.call_transaction_id - call_transaction.id [delete: cascade]
+
+// wallet & ledger
+Ref: wallet.account_id - account.id [delete: restrict]
+Ref: ledger_transaction.reversal_of > ledger_transaction.id
+Ref: ledger_entry.transaction_id > ledger_transaction.id [delete: restrict]
+Ref: ledger_entry.account_id > account.id [delete: restrict]
+Ref: idempotency_key.account_id > account.id [delete: cascade]
+
+// payment
+Ref: payment_order.user_id > account.id [delete: restrict]
+Ref: payment_order.coin_package_id > coin_package.id [delete: restrict]
+Ref: iap_receipt.payment_order_id > payment_order.id [delete: restrict]
+Ref: bank_transfer_proof.payment_order_id - payment_order.id [delete: restrict]
+Ref: bank_transfer_proof.reviewed_by > account.id [delete: set null]
+
+// promotion
+Ref: voucher_redemption.voucher_id > voucher.id [delete: restrict]
+Ref: voucher_redemption.account_id > account.id [delete: restrict]
+Ref: referral_attribution.referrer_id > account.id [delete: restrict]
+Ref: referral_attribution.referee_id > account.id [delete: restrict]
+Ref: referral_attribution.qualifying_payment_order_id > payment_order.id
+
+// earning & payout
+Ref: seer_earning.seer_id > account.id [delete: restrict]
+Ref: seer_earning.ledger_transaction_id > ledger_transaction.id
+Ref: payout_account.seer_id > account.id [delete: cascade]
+Ref: payout_request.seer_id > account.id [delete: restrict]
+Ref: payout_request.payout_account_id > payout_account.id [delete: restrict]
+Ref: payout_request.reviewed_by > account.id [delete: set null]
+
+// horoscope & AI
+Ref: birth_profile.account_id > account.id [delete: cascade]
+Ref: ai_reading_session.account_id > account.id [delete: cascade]
+Ref: ai_reading_session.birth_profile_id > birth_profile.id [delete: set null]
+Ref: ai_reading_message.session_id > ai_reading_session.id [delete: cascade]
+Ref: ai_usage_quota.account_id > account.id [delete: cascade]
+
+// live & gift
+Ref: live_room.seer_id > account.id [delete: restrict]
+Ref: gift_transaction.live_room_id > live_room.id [delete: restrict]
+Ref: gift_transaction.sender_id > account.id [delete: restrict]
+Ref: gift_transaction.seer_id > account.id [delete: restrict]
+Ref: gift_transaction.gift_id > gift.id [delete: restrict]
+
+// notification & moderation & audit
+Ref: notification_inbox.account_id > account.id [delete: cascade]
+Ref: block_relation.seer_id > account.id [delete: cascade]
+Ref: block_relation.user_id > account.id [delete: cascade]
+Ref: user_report.reporter_id > account.id [delete: cascade]
+Ref: moderation_action.target_account_id > account.id [delete: cascade]
+Ref: moderation_action.user_report_id > user_report.id [delete: set null]
+Ref: moderation_action.created_by > account.id [delete: set null]
+Ref: audit_log.actor_id > account.id [delete: set null]
+
+//======================================================================
+// TableGroups (14 bounded contexts + supabase)
+//======================================================================
+
+TableGroup supabase_managed {
+  auth_users
+}
+
+TableGroup identity {
+  account
+  user_profile
+  profile_photo
+  seer_profile
+  device_token
+  agreement
+  account_agreement
+  account_deletion_request
+}
+
+TableGroup seer_catalog {
+  seer_level
+  skill
+  seer_skill
+  service_type
+  seer_service
+  seer_schedule
+  seer_document
+  favorite_seer
+}
+
+TableGroup consultation {
+  question
+  question_message
+  review
+  review_tag
+}
+
+TableGroup appointment_ctx {
+  appointment_room
+  appointment
+  appointment_message
+}
+
+TableGroup call_ctx {
+  call_transaction
+  call_extension
+  media_session
+}
+
+TableGroup wallet_ledger {
+  wallet
+  ledger_transaction
+  ledger_entry
+  idempotency_key
+}
+
+TableGroup payment {
+  coin_package
+  payment_order
+  iap_receipt
+  bank_transfer_proof
+  payment_webhook_event
+}
+
+TableGroup promotion {
+  voucher
+  voucher_redemption
+  referral_attribution
+}
+
+TableGroup earning_payout {
+  seer_earning
+  payout_account
+  payout_request
+}
+
+TableGroup horoscope_ai {
+  birth_profile
+  horoscope_content
+  ai_reading_session
+  ai_reading_message
+  ai_usage_quota
+}
+
+TableGroup live_gift {
+  live_room
+  gift
+  gift_transaction
+}
+
+TableGroup notification_outbox {
+  notification_inbox
+  outbox_event
+}
+
+TableGroup config_ops {
+  app_config
+  rate_limit_counter
+}
+
+TableGroup moderation_audit {
+  block_relation
+  user_report
+  moderation_action
+  audit_log
+}
