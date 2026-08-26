@@ -13,6 +13,11 @@
 		1A0000010000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000014 /* Assets.xcassets */; };
 		1A0000010000000000000005 /* RecordListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000015 /* RecordListViewModelTests.swift */; };
 		1A0000010000000000000006 /* UserProfileViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000018 /* UserProfileViewModel.swift */; };
+		1A0000010000000000000007 /* HoroDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001B /* HoroDomainModels.swift */; };
+		1A0000010000000000000008 /* HoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001C /* HoroDataService.swift */; };
+		1A0000010000000000000009 /* MockHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001D /* MockHoroDataService.swift */; };
+		1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001E /* SupabaseHoroDataService.swift */; };
+		1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001F /* HoroDataServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -34,6 +39,11 @@
 		1A0000010000000000000016 /* HoroTest.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HoroTest.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000010000000000000017 /* HoroTestTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HoroTestTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000010000000000000018 /* UserProfileViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileViewModel.swift; sourceTree = "<group>"; };
+		1A000001000000000000001B /* HoroDomainModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDomainModels.swift; sourceTree = "<group>"; };
+		1A000001000000000000001C /* HoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataService.swift; sourceTree = "<group>"; };
+		1A000001000000000000001D /* MockHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHoroDataService.swift; sourceTree = "<group>"; };
+		1A000001000000000000001E /* SupabaseHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseHoroDataService.swift; sourceTree = "<group>"; };
+		1A000001000000000000001F /* HoroDataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -68,6 +78,8 @@
 			children = (
 				1A0000010000000000000011 /* HoroTestApp.swift */,
 				1A0000010000000000000012 /* ContentView.swift */,
+				1A0000010000000000000064 /* Models */,
+				1A0000010000000000000065 /* Services */,
 				1A0000010000000000000013 /* RecordListViewModel.swift */,
 				1A0000010000000000000018 /* UserProfileViewModel.swift */,
 				1A0000010000000000000014 /* Assets.xcassets */,
@@ -79,8 +91,27 @@
 			isa = PBXGroup;
 			children = (
 				1A0000010000000000000015 /* RecordListViewModelTests.swift */,
+				1A000001000000000000001F /* HoroDataServiceTests.swift */,
 			);
 			path = HoroTestTests;
+			sourceTree = "<group>";
+		};
+		1A0000010000000000000064 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				1A000001000000000000001B /* HoroDomainModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		1A0000010000000000000065 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				1A000001000000000000001C /* HoroDataService.swift */,
+				1A000001000000000000001D /* MockHoroDataService.swift */,
+				1A000001000000000000001E /* SupabaseHoroDataService.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 		1A0000010000000000000063 /* Products */ = {
@@ -193,6 +224,10 @@
 			files = (
 				1A0000010000000000000001 /* HoroTestApp.swift in Sources */,
 				1A0000010000000000000002 /* ContentView.swift in Sources */,
+				1A0000010000000000000007 /* HoroDomainModels.swift in Sources */,
+				1A0000010000000000000008 /* HoroDataService.swift in Sources */,
+				1A0000010000000000000009 /* MockHoroDataService.swift in Sources */,
+				1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */,
 				1A0000010000000000000003 /* RecordListViewModel.swift in Sources */,
 				1A0000010000000000000006 /* UserProfileViewModel.swift in Sources */,
 			);
@@ -203,6 +238,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A0000010000000000000005 /* RecordListViewModelTests.swift in Sources */,
+				1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

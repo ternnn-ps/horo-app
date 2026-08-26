@@ -48,5 +48,7 @@ If Xcode says the bundle identifier is already used, change it to something uniq
 - Delete records from each record action menu.
 - Mark records done or active from the record action menu.
 - Persist records locally with `UserDefaults`.
+- Supabase-ready domain models and data service protocol for users, seer profiles, customer profiles, reading requests, chat threads, messages, and reviews.
+- In-memory `MockHoroDataService` with unit coverage for role login, seer search, reading request CRUD, and chat messages.
 
-The CRUD storage is intentionally isolated behind `RecordStoring`, so a Supabase-backed implementation can replace `UserDefaultsRecordStore` later.
+The CRUD storage is intentionally isolated behind `RecordStoring`, so a Supabase-backed implementation can replace `UserDefaultsRecordStore` later. The broader app data layer is isolated behind `HoroDataServicing`, with a mock service available now and a `SupabaseHoroDataService` scaffold ready for the Supabase Swift SDK.
