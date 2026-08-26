@@ -4,70 +4,36 @@ struct ContentView: View {
     @StateObject private var recordViewModel = RecordListViewModel()
     @StateObject private var profileViewModel = UserProfileViewModel()
 
-    @State private var selectedTab: TellerTab = .chat
+    @State private var sessionRole: OperationRole?
+    @State private var selectedSeerTab: SeerTab = .chat
+    @State private var selectedCustomerTab: CustomerTab = .home
     @State private var editorMode: RecordEditorMode?
     @State private var isDeleteConfirmationPresented = false
     @State private var recordPendingDeletion: TestRecord?
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationStack {
-                ChatHomeView(profile: profileViewModel.profile)
-                    .navigationTitle("Chat")
-                    .navigationBarTitleDisplayMode(.large)
-            }
-            .tabItem {
-                Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
-            }
-            .tag(TellerTab.chat)
-
-            NavigationStack {
-                DashboardPageView(
-                    profile: profileViewModel.profile,
-                    records: recordViewModel.records,
-                    totalCount: recordViewModel.totalCount,
-                    activeCount: recordViewModel.activeCount,
-                    completedCount: recordViewModel.completedCount,
-                    onViewProfile: { selectedTab = .profile },
-                    onOpenChat: { selectedTab = .chat },
+        Group {
+            switch sessionRole {
+            case .seer:
+                SeerWorkspaceView(
+                    selectedTab: $selectedSeerTab,
+                    profileViewModel: profileViewModel,
+                    recordViewModel: recordViewModel,
                     onCreateRecord: { editorMode = .create },
                     onEditRecord: { editorMode = .edit($0) },
-                    onToggleRecord: { recordViewModel.toggleCompletion(for: $0) },
-                    onDeleteRecord: { prepareDelete($0) }
+                    onDeleteRecord: { prepareDelete($0) },
+                    onLogout: logout
                 )
-                .navigationTitle("Dashboard")
-                .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            editorMode = .create
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityLabel("Add Record")
-                    }
+            case .customer:
+                CustomerWorkspaceView(
+                    selectedTab: $selectedCustomerTab,
+                    onLogout: logout
+                )
+            case nil:
+                LoginView { role in
+                    sessionRole = role
                 }
             }
-            .tabItem {
-                Label("Dashboard", systemImage: "chart.bar.xaxis")
-            }
-            .tag(TellerTab.dashboard)
-
-            NavigationStack {
-                ProfilePageView(
-                    profileViewModel: profileViewModel,
-                    totalCount: recordViewModel.totalCount,
-                    activeCount: recordViewModel.activeCount,
-                    completedCount: recordViewModel.completedCount,
-                    onCreateRecord: { editorMode = .create }
-                )
-                .navigationTitle("Profile")
-                .navigationBarTitleDisplayMode(.large)
-            }
-            .tabItem {
-                Label("Profile", systemImage: "person.crop.circle.fill")
-            }
-            .tag(TellerTab.profile)
         }
         .tint(.teal)
         .sheet(item: $editorMode) { mode in
@@ -103,11 +69,153 @@ struct ContentView: View {
         recordPendingDeletion = record
         isDeleteConfirmationPresented = true
     }
+
+    private func logout() {
+        sessionRole = nil
+        selectedSeerTab = .chat
+        selectedCustomerTab = .home
+        editorMode = nil
+        recordPendingDeletion = nil
+    }
 }
 
-private enum TellerTab {
+private struct SeerWorkspaceView: View {
+    @Binding var selectedTab: SeerTab
+
+    @ObservedObject var profileViewModel: UserProfileViewModel
+    @ObservedObject var recordViewModel: RecordListViewModel
+
+    let onCreateRecord: () -> Void
+    let onEditRecord: (TestRecord) -> Void
+    let onDeleteRecord: (TestRecord) -> Void
+    let onLogout: () -> Void
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            NavigationStack {
+                ChatHomeView(profile: profileViewModel.profile)
+                    .navigationTitle("Chat")
+                    .navigationBarTitleDisplayMode(.large)
+                    .toolbar {
+                        logoutToolbarItem
+                    }
+            }
+            .tabItem {
+                Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+            }
+            .tag(SeerTab.chat)
+
+            NavigationStack {
+                DashboardPageView(
+                    profile: profileViewModel.profile,
+                    records: recordViewModel.records,
+                    totalCount: recordViewModel.totalCount,
+                    activeCount: recordViewModel.activeCount,
+                    completedCount: recordViewModel.completedCount,
+                    onViewProfile: { selectedTab = .profile },
+                    onOpenChat: { selectedTab = .chat },
+                    onCreateRecord: onCreateRecord,
+                    onEditRecord: onEditRecord,
+                    onToggleRecord: { recordViewModel.toggleCompletion(for: $0) },
+                    onDeleteRecord: onDeleteRecord
+                )
+                .navigationTitle("Dashboard")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    logoutToolbarItem
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: onCreateRecord) {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("Add Record")
+                    }
+                }
+            }
+            .tabItem {
+                Label("Dashboard", systemImage: "chart.bar.xaxis")
+            }
+            .tag(SeerTab.dashboard)
+
+            NavigationStack {
+                ProfilePageView(
+                    profileViewModel: profileViewModel,
+                    totalCount: recordViewModel.totalCount,
+                    activeCount: recordViewModel.activeCount,
+                    completedCount: recordViewModel.completedCount,
+                    onCreateRecord: onCreateRecord,
+                    onLogout: onLogout
+                )
+                .navigationTitle("Profile")
+                .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("Profile", systemImage: "person.crop.circle.fill")
+            }
+            .tag(SeerTab.profile)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var logoutToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button(action: onLogout) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+            }
+            .accessibilityLabel("Log Out")
+        }
+    }
+}
+
+private struct CustomerWorkspaceView: View {
+    @Binding var selectedTab: CustomerTab
+
+    let onLogout: () -> Void
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            NavigationStack {
+                CustomerHomeView(onOpenChat: { selectedTab = .chat })
+                    .navigationTitle("Home")
+                    .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("Home", systemImage: "sparkles")
+            }
+            .tag(CustomerTab.home)
+
+            NavigationStack {
+                CustomerChatSpaceView()
+                    .navigationTitle("Chat")
+                    .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+            }
+            .tag(CustomerTab.chat)
+
+            NavigationStack {
+                CustomerProfileSpaceView(onLogout: onLogout)
+                    .navigationTitle("Profile")
+                    .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("Profile", systemImage: "person.crop.circle.fill")
+            }
+            .tag(CustomerTab.profile)
+        }
+    }
+}
+
+private enum SeerTab {
     case chat
     case dashboard
+    case profile
+}
+
+private enum CustomerTab {
+    case home
+    case chat
     case profile
 }
 
@@ -149,15 +257,17 @@ private struct AppBackground: View {
 }
 
 private enum OperationRole: String, CaseIterable, Identifiable {
-    case teller
+    case seer
     case customer
 
     var id: String { rawValue }
 
+    var loginKeyword: String { rawValue }
+
     var title: String {
         switch self {
-        case .teller:
-            return "Teller"
+        case .seer:
+            return "Seer"
         case .customer:
             return "Customer"
         }
@@ -165,16 +275,16 @@ private enum OperationRole: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .teller:
-            return "Handles queue, chat, and service records"
+        case .seer:
+            return "Handles readings, chat queue, and session notes"
         case .customer:
-            return "Requests help and shares account context"
+            return "Requests guidance, chats, and tracks readings"
         }
     }
 
     var icon: String {
         switch self {
-        case .teller:
+        case .seer:
             return "person.badge.shield.checkmark"
         case .customer:
             return "person.crop.circle.badge.questionmark"
@@ -183,11 +293,183 @@ private enum OperationRole: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
-        case .teller:
+        case .seer:
             return .teal
         case .customer:
             return .indigo
         }
+    }
+}
+
+private struct LoginView: View {
+    let onLogin: (OperationRole) -> Void
+
+    @State private var loginText = ""
+    @State private var password = ""
+    @State private var validationMessage: String?
+
+    private var requestedRole: OperationRole? {
+        let value = loginText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return OperationRole.allCases.first { $0.loginKeyword == value }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    LoginHero()
+
+                    VStack(spacing: 12) {
+                        TextField("Type seer or customer", text: $loginText)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding(.horizontal, 14)
+                            .frame(height: 48)
+                            .background(AppColors.elevatedSurface)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                        SecureField("Password optional", text: $password)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding(.horizontal, 14)
+                            .frame(height: 48)
+                            .background(AppColors.elevatedSurface)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                        if let validationMessage {
+                            Text(validationMessage)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        Button(action: submit) {
+                            Label(
+                                requestedRole.map { "Login as \($0.title)" } ?? "Login",
+                                systemImage: "arrow.right.circle.fill"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    }
+                    .padding(16)
+                    .cardStyle()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(
+                            title: "Choose Role",
+                            subtitle: "Tap a role or type its keyword"
+                        )
+
+                        ForEach(OperationRole.allCases) { role in
+                            Button {
+                                loginText = role.loginKeyword
+                                validationMessage = nil
+                            } label: {
+                                LoginRoleCard(
+                                    role: role,
+                                    isSelected: requestedRole == role
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(16)
+                .padding(.bottom, 24)
+            }
+            .scrollIndicators(.hidden)
+            .background(AppBackground())
+            .navigationTitle("Horo")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func submit() {
+        guard let role = requestedRole else {
+            validationMessage = "Use \"seer\" or \"customer\" to enter this mock app."
+            return
+        }
+
+        validationMessage = nil
+        onLogin(role)
+    }
+}
+
+private struct LoginHero: View {
+    var body: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.teal, .indigo, .blue],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 86, height: 86)
+
+                Image(systemName: "sparkles")
+                    .font(.system(size: 38, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(spacing: 6) {
+                Text("Horo")
+                    .font(.largeTitle.bold())
+
+                Text("Mock role login for seer and customer spaces")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+    }
+}
+
+private struct LoginRoleCard: View {
+    let role: OperationRole
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(role.tint.opacity(0.14))
+
+                Image(systemName: role.icon)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(role.tint)
+            }
+            .frame(width: 48, height: 48)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(role.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(role.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Text(role.loginKeyword)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(role.tint)
+                .padding(.horizontal, 9)
+                .frame(height: 26)
+                .background(role.tint.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .padding(14)
+        .cardStyle(borderColor: isSelected ? role.tint.opacity(0.55) : AppColors.border)
     }
 }
 
@@ -203,7 +485,7 @@ private struct RoleOverviewSection: View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(
                 title: "Operation Roles",
-                subtitle: "Teller workspace is active"
+                subtitle: "Seer workspace is active"
             )
 
             LazyVGrid(columns: columns, spacing: 12) {
@@ -293,8 +575,8 @@ private struct ChatHomeView: View {
                         NavigationLink {
                             MockChatDetailView(
                                 conversation: conversation,
-                                tellerName: profile.fullName,
-                                tellerInitials: profile.initials
+                                seerName: profile.fullName,
+                                seerInitials: profile.initials
                             )
                         } label: {
                             InboxRow(conversation: conversation)
@@ -320,7 +602,7 @@ private struct ChatOperationsHeader: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text("Teller Desk")
+                    Text("Seer Desk")
                         .font(.headline)
 
                     StatusBadge(title: "Online", color: .green)
@@ -330,7 +612,7 @@ private struct ChatOperationsHeader: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Text("Customer support queue")
+                Text("Customer reading queue")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -413,12 +695,19 @@ private struct QueueMetricTile: View {
 private struct ConversationSearchField: View {
     @Binding var text: String
 
+    let placeholder: String
+
+    init(text: Binding<String>, placeholder: String = "Search customer or reading") {
+        _text = text
+        self.placeholder = placeholder
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
 
-            TextField("Search customer or case", text: $text)
+            TextField(placeholder, text: $text)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
@@ -500,7 +789,7 @@ private struct InboxRow: View {
                     ConversationMetaChip(
                         title: conversation.accountTier,
                         color: .blue,
-                        icon: "creditcard"
+                        icon: "sparkles"
                     )
                 }
             }
@@ -539,16 +828,16 @@ private struct ConversationMetaChip: View {
 
 private struct MockChatDetailView: View {
     let conversation: ChatConversation
-    let tellerName: String
-    let tellerInitials: String
+    let seerName: String
+    let seerInitials: String
 
     @State private var messages: [ChatMessage]
     @State private var draft = ""
 
-    init(conversation: ChatConversation, tellerName: String, tellerInitials: String) {
+    init(conversation: ChatConversation, seerName: String, seerInitials: String) {
         self.conversation = conversation
-        self.tellerName = tellerName
-        self.tellerInitials = tellerInitials
+        self.seerName = seerName
+        self.seerInitials = seerInitials
         _messages = State(initialValue: conversation.messages)
     }
 
@@ -563,7 +852,7 @@ private struct MockChatDetailView: View {
                             ChatBubble(
                                 message: message,
                                 customerInitials: conversation.initials,
-                                tellerInitials: tellerInitials
+                                seerInitials: seerInitials
                             )
                             .id(message.id)
                         }
@@ -582,6 +871,7 @@ private struct MockChatDetailView: View {
 
             ChatComposer(
                 draft: $draft,
+                placeholder: "Message customer",
                 quickReplies: conversation.quickReplies,
                 onSend: sendMessage
             )
@@ -615,7 +905,7 @@ private struct MockChatDetailView: View {
 
         messages.append(
             ChatMessage(
-                sender: .teller,
+                sender: .seer,
                 text: cleanDraft,
                 timestamp: Date()
             )
@@ -656,7 +946,7 @@ private struct ChatCustomerHeader: View {
                         )
                     }
 
-                    Text("\(conversation.customerId) • \(conversation.accountTier) customer")
+                    Text("\(conversation.customerId) • \(conversation.accountTier) member")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -703,17 +993,17 @@ private struct ChatCustomerHeader: View {
 private struct ChatBubble: View {
     let message: ChatMessage
     let customerInitials: String
-    let tellerInitials: String
+    let seerInitials: String
 
     var body: some View {
         switch message.sender {
         case .system:
             SystemMessageBubble(message: message)
-        case .customer, .teller:
+        case .customer, .seer:
             ChatPartyBubble(
                 message: message,
                 customerInitials: customerInitials,
-                tellerInitials: tellerInitials
+                seerInitials: seerInitials
             )
         }
     }
@@ -722,15 +1012,15 @@ private struct ChatBubble: View {
 private struct ChatPartyBubble: View {
     let message: ChatMessage
     let customerInitials: String
-    let tellerInitials: String
+    let seerInitials: String
 
-    private var isTeller: Bool {
-        message.sender == .teller
+    private var isSeer: Bool {
+        message.sender == .seer
     }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            if isTeller {
+            if isSeer {
                 Spacer(minLength: 52)
             } else {
                 MiniAvatar(
@@ -739,17 +1029,17 @@ private struct ChatPartyBubble: View {
                 )
             }
 
-            VStack(alignment: isTeller ? .trailing : .leading, spacing: 5) {
+            VStack(alignment: isSeer ? .trailing : .leading, spacing: 5) {
                 Text(message.text)
                     .font(.body)
-                    .foregroundStyle(isTeller ? .white : .primary)
+                    .foregroundStyle(isSeer ? .white : .primary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(isTeller ? Color.teal : AppColors.elevatedSurface)
+                    .background(isSeer ? Color.teal : AppColors.elevatedSurface)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
                 HStack(spacing: 4) {
-                    if isTeller {
+                    if isSeer {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.caption2)
                     }
@@ -760,9 +1050,9 @@ private struct ChatPartyBubble: View {
                 .foregroundStyle(.tertiary)
             }
 
-            if isTeller {
+            if isSeer {
                 MiniAvatar(
-                    initials: tellerInitials,
+                    initials: seerInitials,
                     color: .teal
                 )
             } else {
@@ -791,6 +1081,7 @@ private struct SystemMessageBubble: View {
 private struct ChatComposer: View {
     @Binding var draft: String
 
+    let placeholder: String
     let quickReplies: [String]
     let onSend: () -> Void
 
@@ -827,7 +1118,7 @@ private struct ChatComposer: View {
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Attach File")
 
-                TextField("Message customer", text: $draft, axis: .vertical)
+                TextField(placeholder, text: $draft, axis: .vertical)
                     .lineLimit(1...4)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
@@ -858,7 +1149,7 @@ private struct ChatComposer: View {
 private struct ChatMessage: Identifiable, Equatable {
     enum Sender {
         case customer
-        case teller
+        case seer
         case system
     }
 
@@ -996,45 +1287,45 @@ private struct ChatConversation: Identifiable {
         ChatConversation(
             customerName: "Mali Chan",
             customerId: "C-1042",
-            topic: "Transfer verification",
+            topic: "Relationship timing",
             status: .waiting,
             priority: .high,
             accountTier: "Gold",
             waitTime: "8m",
             unreadCount: 2,
-            tint: .red,
+            tint: .purple,
             messages: [
                 ChatMessage(
                     sender: .system,
-                    text: "Customer verified by phone number and device check.",
+                    text: "Customer shared birth time and relationship focus.",
                     timestamp: Date().addingTimeInterval(-820)
                 ),
                 ChatMessage(
                     sender: .customer,
-                    text: "I cannot confirm the OTP for my transfer.",
+                    text: "I want to know if this is the right moment to reconnect.",
                     timestamp: Date().addingTimeInterval(-760)
                 ),
                 ChatMessage(
-                    sender: .teller,
-                    text: "I can help. Please keep the app open while I review the request.",
+                    sender: .seer,
+                    text: "I can help. I am checking the timing and emotional pattern now.",
                     timestamp: Date().addingTimeInterval(-700)
                 ),
                 ChatMessage(
                     sender: .customer,
-                    text: "Thank you. The transfer is time sensitive.",
+                    text: "Thank you. I can add more context if needed.",
                     timestamp: Date().addingTimeInterval(-480)
                 )
             ],
             quickReplies: [
-                "I am checking that now.",
-                "Please confirm the last 4 digits.",
-                "I will stay with you until it is resolved."
+                "I am reading that now.",
+                "Please share one more detail.",
+                "I will guide you step by step."
             ]
         ),
         ChatConversation(
             customerName: "Niran K.",
             customerId: "C-2217",
-            topic: "Card limit request",
+            topic: "Career direction",
             status: .active,
             priority: .vip,
             accountTier: "Premier",
@@ -1044,35 +1335,35 @@ private struct ChatConversation: Identifiable {
             messages: [
                 ChatMessage(
                     sender: .system,
-                    text: "Customer has a verified Premier account.",
+                    text: "Customer selected career and decision timing as the reading focus.",
                     timestamp: Date().addingTimeInterval(-520)
                 ),
                 ChatMessage(
                     sender: .customer,
-                    text: "Can you raise my card limit for travel today?",
+                    text: "I have two job options and need help reading the timing.",
                     timestamp: Date().addingTimeInterval(-460)
                 ),
                 ChatMessage(
-                    sender: .teller,
-                    text: "Yes, I am reviewing the available limit options.",
+                    sender: .seer,
+                    text: "The second path feels slower but more stable. I am checking the near-term window.",
                     timestamp: Date().addingTimeInterval(-390)
                 ),
                 ChatMessage(
                     sender: .customer,
-                    text: "Great. I need it before my flight.",
+                    text: "That matches how it feels. What should I watch for this week?",
                     timestamp: Date().addingTimeInterval(-160)
                 )
             ],
             quickReplies: [
-                "I found the available options.",
-                "This will take about 2 minutes.",
-                "Please review the confirmation screen."
+                "This week favors patience.",
+                "I see one important conversation.",
+                "Let me compare both paths."
             ]
         ),
         ChatConversation(
             customerName: "Anya S.",
             customerId: "C-3098",
-            topic: "New account onboarding",
+            topic: "Daily energy reading",
             status: .followUp,
             priority: .normal,
             accountTier: "Standard",
@@ -1082,24 +1373,24 @@ private struct ChatConversation: Identifiable {
             messages: [
                 ChatMessage(
                     sender: .customer,
-                    text: "I uploaded my documents but still see pending.",
+                    text: "Can you save today’s reading? I want to come back to it later.",
                     timestamp: Date().addingTimeInterval(-4100)
                 ),
                 ChatMessage(
-                    sender: .teller,
-                    text: "Your identity document is approved. The address document still needs review.",
+                    sender: .seer,
+                    text: "Saved. The main theme is slow action, clear boundaries, and a calm reply.",
                     timestamp: Date().addingTimeInterval(-3980)
                 ),
                 ChatMessage(
                     sender: .system,
-                    text: "Follow-up reminder created for the address review.",
+                    text: "Follow-up reminder created for tomorrow morning.",
                     timestamp: Date().addingTimeInterval(-3840)
                 )
             ],
             quickReplies: [
-                "I checked the document status.",
-                "Please upload one more address document.",
-                "I will send a reminder."
+                "I saved this reading.",
+                "Would you like a reminder?",
+                "I can pull one more card."
             ]
         )
     ]
@@ -1145,6 +1436,1225 @@ private struct MiniAvatar: View {
     }
 }
 
+private struct CustomerHomeView: View {
+    let onOpenChat: () -> Void
+
+    @State private var selectedMenu: CustomerHomeMenu = .overview
+    @State private var seerSearchText = ""
+
+    private let profile = CustomerMockProfile.default
+    private let readings = CustomerReading.mockReadings
+    private let seers = CustomerSeer.mockSeers
+
+    private var filteredSeers: [CustomerSeer] {
+        let query = seerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        guard !query.isEmpty else {
+            return seers
+        }
+
+        return seers.filter { seer in
+            seer.searchableText.contains(query)
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                CustomerHeroCard(profile: profile, onOpenChat: onOpenChat)
+
+                CustomerHomeMenuPicker(selection: $selectedMenu)
+
+                switch selectedMenu {
+                case .overview:
+                    CustomerReadingStatusCard(reading: readings[0])
+
+                    CustomerActionGrid(
+                        onOpenChat: onOpenChat,
+                        onFindSeer: { selectedMenu = .findSeer }
+                    )
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(
+                            title: "Upcoming Guidance",
+                            subtitle: "Mock customer requests and reading history"
+                        )
+
+                        LazyVStack(spacing: 10) {
+                            ForEach(readings) { reading in
+                                CustomerReadingRow(reading: reading)
+                            }
+                        }
+                    }
+
+                    CustomerFeaturedSeersPreview(seers: Array(seers.prefix(2)))
+                case .findSeer:
+                    CustomerSeerDiscoveryView(
+                        searchText: $seerSearchText,
+                        seers: filteredSeers,
+                        allSeerCount: seers.count
+                    )
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.hidden)
+        .background(AppBackground())
+    }
+}
+
+private struct CustomerHeroCard: View {
+    let profile: CustomerMockProfile
+    let onOpenChat: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ProfilePhotoView(profile: profile.userProfile, size: 64)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Customer Space")
+                        .font(.headline)
+
+                    StatusBadge(title: profile.memberTier, color: .indigo)
+                }
+
+                Text(profile.fullName)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Text("Next insight window: \(profile.nextInsightWindow)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.teal)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: onOpenChat) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.title2)
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Open Chat")
+        }
+        .padding(16)
+        .cardStyle()
+    }
+}
+
+private struct CustomerReadingStatusCard: View {
+    let reading: CustomerReading
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(reading.color.opacity(0.14))
+
+                    Image(systemName: reading.icon)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(reading.color)
+                }
+                .frame(width: 52, height: 52)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Active Reading")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(reading.color)
+
+                    Text(reading.title)
+                        .font(.headline)
+
+                    Text(reading.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                ConversationMetaChip(title: reading.status, color: reading.color, icon: "sparkles")
+                ConversationMetaChip(title: reading.timeframe, color: .blue, icon: "calendar")
+            }
+        }
+        .padding(16)
+        .cardStyle(borderColor: reading.color.opacity(0.35))
+    }
+}
+
+private struct CustomerActionGrid: View {
+    let onOpenChat: () -> Void
+    let onFindSeer: () -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            CustomerActionTile(
+                title: "Ask Seer",
+                subtitle: "Start a chat",
+                icon: "bubble.left.and.bubble.right.fill",
+                color: .teal,
+                action: onOpenChat
+            )
+
+            CustomerActionTile(
+                title: "Find Seer",
+                subtitle: "Search guides",
+                icon: "person.2.fill",
+                color: .purple,
+                action: onFindSeer
+            )
+
+            CustomerActionTile(
+                title: "Daily Card",
+                subtitle: "Preview insight",
+                icon: "rectangle.stack.fill",
+                color: .orange,
+                action: {}
+            )
+
+            CustomerActionTile(
+                title: "Saved Notes",
+                subtitle: "3 entries",
+                icon: "bookmark.fill",
+                color: .blue,
+                action: {}
+            )
+        }
+    }
+}
+
+private struct CustomerActionTile: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 9) {
+                Image(systemName: icon)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(color)
+
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.86)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+            .padding(14)
+            .cardStyle()
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct CustomerReadingRow: View {
+    let reading: CustomerReading
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(reading.color.opacity(0.14))
+
+                Image(systemName: reading.icon)
+                    .font(.headline)
+                    .foregroundStyle(reading.color)
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(reading.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(reading.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Text(reading.status)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(reading.color)
+        }
+        .padding(12)
+        .cardStyle()
+    }
+}
+
+private enum CustomerHomeMenu: String, CaseIterable, Identifiable {
+    case overview
+    case findSeer
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .overview:
+            return "Overview"
+        case .findSeer:
+            return "Find Seer"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .overview:
+            return "house.fill"
+        case .findSeer:
+            return "person.2.fill"
+        }
+    }
+}
+
+private struct CustomerHomeMenuPicker: View {
+    @Binding var selection: CustomerHomeMenu
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(CustomerHomeMenu.allCases) { menu in
+                Button {
+                    withAnimation(.snappy) {
+                        selection = menu
+                    }
+                } label: {
+                    Label(menu.title, systemImage: menu.icon)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 42)
+                        .foregroundStyle(selection == menu ? .white : .secondary)
+                        .background(selection == menu ? Color.teal : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(menu.title)
+            }
+        }
+        .padding(4)
+        .background(AppColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(AppColors.border)
+        }
+    }
+}
+
+private struct CustomerFeaturedSeersPreview: View {
+    let seers: [CustomerSeer]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Suggested Seers",
+                subtitle: "Popular guides based on your recent focus"
+            )
+
+            LazyVStack(spacing: 12) {
+                ForEach(seers) { seer in
+                    NavigationLink {
+                        CustomerSeerProfileView(seer: seer)
+                    } label: {
+                        CustomerSeerCard(seer: seer)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+private struct CustomerSeerDiscoveryView: View {
+    @Binding var searchText: String
+
+    let seers: [CustomerSeer]
+    let allSeerCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Find Seer",
+                subtitle: "\(seers.count) of \(allSeerCount) mock seers"
+            )
+
+            ConversationSearchField(
+                text: $searchText,
+                placeholder: "Search seer, skill, or style"
+            )
+
+            if seers.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text("No seers found")
+                        .font(.headline)
+
+                    Text("Try a skill like relationship, tarot, career, or astrology.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, minHeight: 150)
+                .padding(16)
+                .cardStyle()
+            } else {
+                LazyVStack(spacing: 12) {
+                    ForEach(seers) { seer in
+                        NavigationLink {
+                            CustomerSeerProfileView(seer: seer)
+                        } label: {
+                            CustomerSeerCard(seer: seer)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct CustomerSeerCard: View {
+    let seer: CustomerSeer
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            CustomerSeerAvatar(seer: seer, size: 54)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(seer.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    Label(seer.rating, systemImage: "star.fill")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.yellow)
+                        .lineLimit(1)
+                }
+
+                Text(seer.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(seer.tint)
+                    .lineLimit(1)
+
+                Text(seer.specialty)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(seer.skills.prefix(3)), id: \.self) { skill in
+                            SeerTag(title: skill, color: seer.tint, icon: "sparkles")
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+                .scrollIndicators(.hidden)
+
+                HStack(spacing: 8) {
+                    ConversationMetaChip(title: seer.rate, color: .blue, icon: "creditcard.fill")
+                    ConversationMetaChip(title: seer.nextAvailable, color: .green, icon: "clock.fill")
+                }
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
+        }
+        .padding(14)
+        .cardStyle(borderColor: seer.tint.opacity(0.32))
+    }
+}
+
+private struct CustomerSeerAvatar: View {
+    let seer: CustomerSeer
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(seer.tint.opacity(0.16))
+
+            Circle()
+                .stroke(seer.tint.opacity(0.28), lineWidth: 1)
+
+            Text(seer.initials)
+                .font(.system(size: size * 0.31, weight: .bold))
+                .foregroundStyle(seer.tint)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+private struct SeerTag: View {
+    let title: String
+    let color: Color
+    let icon: String?
+
+    init(title: String, color: Color, icon: String? = nil) {
+        self.title = title
+        self.color = color
+        self.icon = icon
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let icon {
+                Image(systemName: icon)
+                    .font(.caption2)
+            }
+
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.84)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(color.opacity(0.12))
+        .clipShape(Capsule())
+    }
+}
+
+private struct CustomerSeerProfileView: View {
+    let seer: CustomerSeer
+
+    private let skillColumns = [
+        GridItem(.adaptive(minimum: 112), spacing: 8)
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                CustomerSeerProfileHero(seer: seer)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(
+                        title: "Skills",
+                        subtitle: "What this seer can help with"
+                    )
+
+                    LazyVGrid(columns: skillColumns, alignment: .leading, spacing: 8) {
+                        ForEach(seer.skills, id: \.self) { skill in
+                            SeerTag(title: skill, color: seer.tint, icon: "sparkles")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(
+                        title: "Styles",
+                        subtitle: "How the reading usually feels"
+                    )
+
+                    LazyVStack(spacing: 10) {
+                        ForEach(seer.styles, id: \.self) { style in
+                            SeerStyleRow(title: style, tint: seer.tint)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    SectionHeader(
+                        title: "Profile",
+                        subtitle: "Mock seer introduction"
+                    )
+
+                    Text(seer.bio)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .cardStyle()
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.hidden)
+        .background(AppBackground())
+        .navigationTitle(seer.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct CustomerSeerProfileHero: View {
+    let seer: CustomerSeer
+
+    var body: some View {
+        VStack(spacing: 14) {
+            CustomerSeerAvatar(seer: seer, size: 86)
+
+            VStack(spacing: 5) {
+                Text(seer.name)
+                    .font(.title3.bold())
+
+                Text(seer.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(seer.tint)
+
+                Text(seer.specialty)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+
+            HStack(spacing: 8) {
+                ConversationMetaChip(title: "\(seer.rating) rating", color: .yellow, icon: "star.fill")
+                ConversationMetaChip(title: "\(seer.reviewCount) reviews", color: .blue, icon: "text.bubble.fill")
+                ConversationMetaChip(title: seer.nextAvailable, color: .green, icon: "clock.fill")
+            }
+
+            Button {
+            } label: {
+                Label("Start Mock Reading", systemImage: "sparkles")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        .padding(16)
+        .cardStyle(borderColor: seer.tint.opacity(0.34))
+    }
+}
+
+private struct SeerStyleRow: View {
+    let title: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "wand.and.stars")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.12))
+                .clipShape(Circle())
+
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .cardStyle()
+    }
+}
+
+private struct CustomerChatSpaceView: View {
+    private let conversations = CustomerConversation.mockConversations
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(
+                        title: "My Seer Chats",
+                        subtitle: "Mock messages from active and past readings"
+                    )
+
+                    LazyVStack(spacing: 12) {
+                        ForEach(conversations) { conversation in
+                            NavigationLink {
+                                CustomerChatDetailView(conversation: conversation)
+                            } label: {
+                                CustomerConversationRow(conversation: conversation)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.hidden)
+        .background(AppBackground())
+    }
+}
+
+private struct CustomerConversationRow: View {
+    let conversation: CustomerConversation
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            MiniAvatar(
+                initials: conversation.seerInitials,
+                color: conversation.tint
+            )
+            .frame(width: 48, height: 48)
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(conversation.seerName)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Text(conversation.lastMessage.timestamp.formatted(date: .omitted, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+
+                Text(conversation.topic)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(conversation.lastMessage.text)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                ConversationMetaChip(
+                    title: conversation.status,
+                    color: conversation.tint,
+                    icon: "sparkles"
+                )
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 3)
+        }
+        .padding(14)
+        .cardStyle()
+    }
+}
+
+private struct CustomerChatDetailView: View {
+    let conversation: CustomerConversation
+
+    @State private var messages: [ChatMessage]
+    @State private var draft = ""
+
+    init(conversation: CustomerConversation) {
+        self.conversation = conversation
+        _messages = State(initialValue: conversation.messages)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            CustomerChatHeader(conversation: conversation)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(messages) { message in
+                            CustomerChatBubble(
+                                message: message,
+                                seerInitials: conversation.seerInitials
+                            )
+                            .id(message.id)
+                        }
+                    }
+                    .padding(16)
+                }
+                .scrollIndicators(.hidden)
+                .onAppear {
+                    scrollToLatestMessage(with: proxy)
+                }
+                .onChange(of: messages.count) { _, _ in
+                    scrollToLatestMessage(with: proxy)
+                }
+            }
+
+            ChatComposer(
+                draft: $draft,
+                placeholder: "Message seer",
+                quickReplies: conversation.quickReplies,
+                onSend: sendMessage
+            )
+        }
+        .background(AppBackground())
+        .navigationTitle(conversation.seerName)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func sendMessage() {
+        let cleanDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleanDraft.isEmpty else {
+            return
+        }
+
+        messages.append(
+            ChatMessage(
+                sender: .customer,
+                text: cleanDraft,
+                timestamp: Date()
+            )
+        )
+        draft = ""
+    }
+
+    private func scrollToLatestMessage(with proxy: ScrollViewProxy) {
+        guard let id = messages.last?.id else {
+            return
+        }
+
+        withAnimation(.easeOut(duration: 0.2)) {
+            proxy.scrollTo(id, anchor: .bottom)
+        }
+    }
+}
+
+private struct CustomerChatHeader: View {
+    let conversation: CustomerConversation
+
+    var body: some View {
+        HStack(spacing: 12) {
+            MiniAvatar(
+                initials: conversation.seerInitials,
+                color: conversation.tint
+            )
+            .frame(width: 48, height: 48)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(conversation.seerName)
+                    .font(.headline)
+
+                Text(conversation.topic)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                ConversationMetaChip(
+                    title: conversation.status,
+                    color: conversation.tint,
+                    icon: "sparkles"
+                )
+            }
+
+            Spacer()
+        }
+        .padding(16)
+        .background(AppColors.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AppColors.border)
+                .frame(height: 1)
+        }
+    }
+}
+
+private struct CustomerChatBubble: View {
+    let message: ChatMessage
+    let seerInitials: String
+
+    private var isCustomer: Bool {
+        message.sender == .customer
+    }
+
+    var body: some View {
+        switch message.sender {
+        case .system:
+            SystemMessageBubble(message: message)
+        case .customer, .seer:
+            HStack(alignment: .bottom, spacing: 8) {
+                if isCustomer {
+                    Spacer(minLength: 52)
+                } else {
+                    MiniAvatar(initials: seerInitials, color: .teal)
+                }
+
+                VStack(alignment: isCustomer ? .trailing : .leading, spacing: 5) {
+                    Text(message.text)
+                        .font(.body)
+                        .foregroundStyle(isCustomer ? .white : .primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(isCustomer ? Color.indigo : AppColors.elevatedSurface)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    Text(message.timestamp.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if isCustomer {
+                    MiniAvatar(initials: "MC", color: .indigo)
+                } else {
+                    Spacer(minLength: 52)
+                }
+            }
+        }
+    }
+}
+
+private struct CustomerProfileSpaceView: View {
+    let onLogout: () -> Void
+
+    private let profile = CustomerMockProfile.default
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                VStack(spacing: 14) {
+                    ProfilePhotoView(
+                        profile: profile.userProfile,
+                        size: 110,
+                        showsCameraBadge: true
+                    )
+
+                    VStack(spacing: 5) {
+                        Text(profile.fullName)
+                            .font(.title2.bold())
+
+                        Text(profile.birthInfo)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 8) {
+                            StatusBadge(title: "Customer", color: .indigo)
+                            StatusBadge(title: profile.memberTier, color: .teal)
+                        }
+                        .padding(.top, 4)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(22)
+                .cardStyle()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "Account", subtitle: "Mock customer information")
+
+                    VStack(spacing: 0) {
+                        ProfileDetailRow(icon: "envelope", title: "Email", value: profile.email)
+                        Divider().padding(.leading, 40)
+                        ProfileDetailRow(icon: "sparkles", title: "Focus", value: profile.focus)
+                        Divider().padding(.leading, 40)
+                        ProfileDetailRow(icon: "calendar", title: "Birth Info", value: profile.birthInfo)
+                    }
+                    .padding(.vertical, 4)
+                    .cardStyle()
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionHeader(title: "Preferences", subtitle: "Customer space settings")
+
+                    VStack(spacing: 0) {
+                        ProfileDetailRow(icon: "bell.badge", title: "Reading Alerts", value: "Enabled")
+                        Divider().padding(.leading, 40)
+                        ProfileDetailRow(icon: "lock.shield", title: "Role Access", value: "Customer")
+                        Divider().padding(.leading, 40)
+                        ProfileDetailRow(icon: "moon.stars", title: "Appearance", value: "System")
+                    }
+                    .padding(.vertical, 4)
+                    .cardStyle()
+                }
+
+                Button(role: .destructive, action: onLogout) {
+                    Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+            }
+            .padding(16)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.hidden)
+        .background(AppBackground())
+    }
+}
+
+private struct CustomerMockProfile {
+    let fullName: String
+    let email: String
+    let birthInfo: String
+    let focus: String
+    let memberTier: String
+    let nextInsightWindow: String
+
+    var userProfile: UserProfile {
+        UserProfile(
+            fullName: fullName,
+            role: "Customer",
+            email: email,
+            phone: "",
+            location: birthInfo
+        )
+    }
+
+    static let `default` = CustomerMockProfile(
+        fullName: "Mali Chan",
+        email: "mali@example.com",
+        birthInfo: "Bangkok • 09:15",
+        focus: "Relationships and timing",
+        memberTier: "Gold",
+        nextInsightWindow: "Today, 20:00"
+    )
+}
+
+private struct CustomerSeer: Identifiable {
+    let id = UUID()
+    let name: String
+    let title: String
+    let specialty: String
+    let rating: String
+    let reviewCount: Int
+    let rate: String
+    let nextAvailable: String
+    let skills: [String]
+    let styles: [String]
+    let bio: String
+    let tint: Color
+
+    var initials: String {
+        let value = name
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+            .joined()
+            .uppercased()
+
+        return value.isEmpty ? "S" : value
+    }
+
+    var searchableText: String {
+        ([name, title, specialty, bio] + skills + styles)
+            .joined(separator: " ")
+            .lowercased()
+    }
+
+    static let mockSeers = [
+        CustomerSeer(
+            name: "Aurora Veil",
+            title: "Relationship Timing Seer",
+            specialty: "Soft guidance for love, reconnecting, and emotional timing.",
+            rating: "4.9",
+            reviewCount: 218,
+            rate: "$18",
+            nextAvailable: "Now",
+            skills: ["Relationship", "Timing", "Tarot", "Birth Chart"],
+            styles: ["Gentle and reflective", "Clear next steps", "Good for emotional questions"],
+            bio: "Aurora focuses on relationship cycles, communication windows, and the small timing signals customers often miss when emotions are loud.",
+            tint: .purple
+        ),
+        CustomerSeer(
+            name: "Kirin Moon",
+            title: "Career Path Reader",
+            specialty: "Practical readings for work decisions, interviews, and pivots.",
+            rating: "4.8",
+            reviewCount: 176,
+            rate: "$15",
+            nextAvailable: "5m",
+            skills: ["Career", "Decision", "Astrology", "Strategy"],
+            styles: ["Direct and practical", "Structured summary", "Best for planning"],
+            bio: "Kirin blends symbolic reading with grounded planning, helping customers turn uncertain career energy into a clean next action.",
+            tint: .teal
+        ),
+        CustomerSeer(
+            name: "Sol Aranya",
+            title: "Daily Energy Guide",
+            specialty: "Fast daily check-ins for mood, focus, and personal energy.",
+            rating: "4.7",
+            reviewCount: 142,
+            rate: "$9",
+            nextAvailable: "12m",
+            skills: ["Daily Card", "Energy", "Mindset", "Focus"],
+            styles: ["Warm and concise", "Action-focused", "Good for quick readings"],
+            bio: "Sol is designed for customers who want a short reading before a busy day, with one clear theme and one small action.",
+            tint: .orange
+        ),
+        CustomerSeer(
+            name: "Mira North",
+            title: "Dream Symbol Interpreter",
+            specialty: "Pattern reading for dreams, recurring symbols, and intuition.",
+            rating: "4.9",
+            reviewCount: 96,
+            rate: "$21",
+            nextAvailable: "30m",
+            skills: ["Dreams", "Symbols", "Intuition", "Journaling"],
+            styles: ["Curious and detailed", "Symbol-by-symbol", "Best with context"],
+            bio: "Mira helps customers unpack dream symbols without making the reading feel heavy, turning strange details into useful self-reflection.",
+            tint: .indigo
+        ),
+        CustomerSeer(
+            name: "Nara Bloom",
+            title: "Calm Clarity Seer",
+            specialty: "Supportive readings for stressful choices and relationship boundaries.",
+            rating: "4.6",
+            reviewCount: 121,
+            rate: "$12",
+            nextAvailable: "1h",
+            skills: ["Boundaries", "Stress", "Relationships", "Clarity"],
+            styles: ["Reassuring tone", "Slow and careful", "Good for sensitive topics"],
+            bio: "Nara is a calm reader for customers who need gentle structure, especially when a question feels too tangled to name clearly.",
+            tint: .pink
+        )
+    ]
+}
+
+private struct CustomerReading: Identifiable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+    let status: String
+    let timeframe: String
+    let icon: String
+    let color: Color
+
+    static let mockReadings = [
+        CustomerReading(
+            title: "Relationship Timing",
+            subtitle: "Aurora is preparing your next reading.",
+            status: "In Progress",
+            timeframe: "Today",
+            icon: "heart.text.square.fill",
+            color: .purple
+        ),
+        CustomerReading(
+            title: "Career Crossroads",
+            subtitle: "Saved guidance from your last session.",
+            status: "Saved",
+            timeframe: "Yesterday",
+            icon: "briefcase.fill",
+            color: .blue
+        ),
+        CustomerReading(
+            title: "Daily Energy",
+            subtitle: "A short card preview for the morning.",
+            status: "Ready",
+            timeframe: "Daily",
+            icon: "sun.max.fill",
+            color: .orange
+        )
+    ]
+}
+
+private struct CustomerConversation: Identifiable {
+    let id = UUID()
+    let seerName: String
+    let topic: String
+    let status: String
+    let tint: Color
+    let messages: [ChatMessage]
+    let quickReplies: [String]
+
+    var seerInitials: String {
+        let value = seerName
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+            .joined()
+            .uppercased()
+
+        return value.isEmpty ? "S" : value
+    }
+
+    var lastMessage: ChatMessage {
+        messages.last ?? ChatMessage(
+            sender: .system,
+            text: "No messages yet.",
+            timestamp: Date()
+        )
+    }
+
+    static let mockConversations = [
+        CustomerConversation(
+            seerName: "Aurora Veil",
+            topic: "Relationship Timing",
+            status: "Reading active",
+            tint: .purple,
+            messages: [
+                ChatMessage(
+                    sender: .system,
+                    text: "Reading request accepted by Aurora.",
+                    timestamp: Date().addingTimeInterval(-1200)
+                ),
+                ChatMessage(
+                    sender: .customer,
+                    text: "I want to understand whether this is the right moment to reconnect.",
+                    timestamp: Date().addingTimeInterval(-1120)
+                ),
+                ChatMessage(
+                    sender: .seer,
+                    text: "I am seeing a slower window. Give me one detail about the last conversation.",
+                    timestamp: Date().addingTimeInterval(-980)
+                ),
+                ChatMessage(
+                    sender: .customer,
+                    text: "It ended kindly, but we have not spoken for three weeks.",
+                    timestamp: Date().addingTimeInterval(-760)
+                )
+            ],
+            quickReplies: [
+                "That feels accurate.",
+                "Can you explain the timing?",
+                "What should I avoid?"
+            ]
+        ),
+        CustomerConversation(
+            seerName: "Kirin Moon",
+            topic: "Career Direction",
+            status: "Follow up",
+            tint: .teal,
+            messages: [
+                ChatMessage(
+                    sender: .customer,
+                    text: "I saved your note about waiting until Friday.",
+                    timestamp: Date().addingTimeInterval(-5600)
+                ),
+                ChatMessage(
+                    sender: .seer,
+                    text: "Good. Friday is better for asking directly. Keep the message simple.",
+                    timestamp: Date().addingTimeInterval(-5480)
+                )
+            ],
+            quickReplies: [
+                "I will do that.",
+                "Can you help me draft it?",
+                "Please remind me Friday."
+            ]
+        )
+    ]
+}
+
 private struct DashboardPageView: View {
     let profile: UserProfile
     let records: [TestRecord]
@@ -1163,13 +2673,13 @@ private struct DashboardPageView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                TellerDashboardHeader(
+                SeerDashboardHeader(
                     profile: profile,
                     activeCount: activeCount,
                     onViewProfile: onViewProfile
                 )
 
-                RoleOverviewSection(activeRole: .teller)
+                RoleOverviewSection(activeRole: .seer)
 
                 OperationsMetricsGrid(
                     queueCount: conversations.count,
@@ -1207,7 +2717,7 @@ private struct DashboardPageView: View {
     }
 }
 
-private struct TellerDashboardHeader: View {
+private struct SeerDashboardHeader: View {
     let profile: UserProfile
     let activeCount: Int
     let onViewProfile: () -> Void
@@ -1219,7 +2729,7 @@ private struct TellerDashboardHeader: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        Text("Teller Operation")
+                        Text("Seer Operation")
                             .font(.headline)
                             .foregroundStyle(.primary)
 
@@ -1234,7 +2744,7 @@ private struct TellerDashboardHeader: View {
                         Image(systemName: "folder.badge.gearshape")
                             .font(.caption2)
 
-                        Text("\(activeCount) active service records")
+                        Text("\(activeCount) active reading notes")
                             .font(.caption.weight(.medium))
                     }
                     .foregroundStyle(.teal)
@@ -1310,7 +2820,7 @@ private struct WorkQueuePreview: View {
             HStack {
                 SectionHeader(
                     title: "Priority Queue",
-                    subtitle: "Customer cases needing teller action"
+                    subtitle: "Customer readings needing seer action"
                 )
 
                 Spacer()
@@ -1369,8 +2879,8 @@ private struct RecordsSectionHeader: View {
     var body: some View {
         HStack {
             SectionHeader(
-                title: "Service Records",
-                subtitle: "Create, update, complete, or delete teller notes"
+                title: "Reading Notes",
+                subtitle: "Create, update, complete, or delete seer notes"
             )
 
             Spacer()
@@ -1398,7 +2908,7 @@ private struct EmptyRecordsView: View {
                 Text("No Records Yet")
                     .font(.title3.bold())
 
-                Text("Add the first teller note for this mock operation.")
+                Text("Add the first seer note for this mock reading flow.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -1517,13 +3027,14 @@ private struct ProfilePageView: View {
     let activeCount: Int
     let completedCount: Int
     let onCreateRecord: () -> Void
+    let onLogout: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
                 ProfileHeroCard(profile: profileViewModel.profile)
 
-                RoleOverviewSection(activeRole: .teller)
+                RoleOverviewSection(activeRole: .seer)
 
                 ProfileContactSection(profile: profileViewModel.profile)
 
@@ -1542,6 +3053,13 @@ private struct ProfilePageView: View {
         .scrollIndicators(.hidden)
         .background(AppBackground())
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: onLogout) {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                }
+                .accessibilityLabel("Log Out")
+            }
+
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
                     ProfileEditorView(
@@ -1579,7 +3097,7 @@ private struct ProfileHeroCard: View {
                     .multilineTextAlignment(.center)
 
                 HStack(spacing: 8) {
-                    StatusBadge(title: "Teller", color: .teal)
+                    StatusBadge(title: "Seer", color: .teal)
                     StatusBadge(title: "On Duty", color: .green)
                 }
                 .padding(.top, 4)
@@ -1596,7 +3114,7 @@ private struct ProfileContactSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Contact", subtitle: "Teller profile detail")
+            SectionHeader(title: "Contact", subtitle: "Seer profile detail")
 
             VStack(spacing: 0) {
                 ProfileDetailRow(icon: "envelope", title: "Email", value: profile.email)
@@ -1620,7 +3138,7 @@ private struct ProfileActivitySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                SectionHeader(title: "Activity", subtitle: "Local operation records")
+                SectionHeader(title: "Activity", subtitle: "Local reading notes")
 
                 Spacer()
 
@@ -1647,12 +3165,12 @@ private struct ProfileActivitySection: View {
 private struct ProfileSettingsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Workspace", subtitle: "Mock teller preferences")
+            SectionHeader(title: "Workspace", subtitle: "Mock seer preferences")
 
             VStack(spacing: 0) {
                 ProfileDetailRow(icon: "bell.badge", title: "Queue Alerts", value: "Enabled")
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "lock.shield", title: "Role Access", value: "Teller")
+                ProfileDetailRow(icon: "lock.shield", title: "Role Access", value: "Seer")
                 Divider().padding(.leading, 40)
                 ProfileDetailRow(icon: "moon.stars", title: "Appearance", value: "System")
             }

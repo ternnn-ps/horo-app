@@ -22,7 +22,7 @@ struct UserProfile: Codable, Equatable {
 
     static let `default` = UserProfile(
         fullName: "Pacharapol S.",
-        role: "Teller Operations",
+        role: "Seer Operations",
         email: "pacharapol@example.com",
         phone: "+66 00 000 0000",
         location: "Bangkok, Thailand"

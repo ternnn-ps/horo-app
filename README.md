@@ -1,6 +1,6 @@
 # HoroTest
 
-A simple SwiftUI iOS test app for a mock teller operation workflow. It includes a customer chat queue, teller dashboard, profile screen, local CRUD records, and an XCTest unit test target.
+A simple SwiftUI iOS test app for a mock seer and customer workflow. It includes role login, a customer chat queue, seer dashboard, customer home space, profile screens, local CRUD records, and an XCTest unit test target.
 
 Minimum iOS version: **iOS 26.1**.
 
@@ -34,11 +34,14 @@ If Xcode says the bundle identifier is already used, change it to something uniq
 ## Current Features
 
 - Light Mode and Dark Mode-friendly SwiftUI colors.
-- Bottom tab navigation for Chat, Dashboard, and Profile.
-- Mock teller and customer operation roles.
-- Teller dashboard with role overview, queue metrics, priority queue preview, and record metrics.
-- Profile page with a profile picture mockup, contact detail, activity, and edit flow.
-- Improved mock chat with a customer queue, search, status/priority chips, customer context, quick replies, and teller/customer bubbles.
+- Mock login page. Type `seer` or `customer`; the password field can be empty.
+- Seer bottom tab navigation for Chat, Dashboard, and Profile.
+- Customer bottom tab navigation for Home, Chat, and Profile.
+- Mock seer and customer roles.
+- Seer dashboard with role overview, queue metrics, priority queue preview, and record metrics.
+- Seer profile page with a profile picture mockup, contact detail, activity, edit flow, and logout.
+- Customer space with active reading, quick actions, searchable seer discovery cards, seer profile details, mock seer chat, customer profile, and logout.
+- Improved mock chat with a customer queue, search, status/priority chips, reading context, quick replies, and seer/customer bubbles.
 - Create records with a title and notes.
 - Read records in a native SwiftUI list.
 - Update records from the edit sheet.
