@@ -7,6 +7,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# ชุด integration กินเหรียญของบัญชีทดสอบทุกรอบ จึงเติมกลับด้วย fixture ก่อนเสมอ
+# (เหมือน test-rest-integration.sh) — ข้ามได้ด้วย SKIP_FIXTURE=1
+if [[ "${SKIP_FIXTURE:-0}" != "1" ]]; then
+  ./scripts/seed-dev-fixture.sh >/dev/null 2>&1 || echo "⚠️  เตรียม fixture ไม่สำเร็จ — ชุด integration อาจล้ม"
+fi
+
 SIMULATOR="${1:-iPhone 17}"
 SUPABASE_URL="${SUPABASE_URL:-http://127.0.0.1:54321}"
 ANON_KEY="${ANON_KEY:-$(supabase status -o env 2>/dev/null | sed -n 's/^ANON_KEY="\(.*\)"$/\1/p')}"

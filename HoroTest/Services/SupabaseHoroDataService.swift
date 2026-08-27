@@ -282,9 +282,9 @@ final class SupabaseHoroDataService: HoroDataServicing {
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
 
-    init(configuration: SupabaseConfiguration) {
+    init(configuration: SupabaseConfiguration, authStorageKey: String? = nil) {
         self.configuration = configuration
-        self.auth = ChataAuth(configuration: configuration)
+        self.auth = ChataAuth(configuration: configuration, storageKey: authStorageKey)
     }
 
     var isSignedIn: Bool {

@@ -6,10 +6,14 @@ import Foundation
 final class ChataAuth {
     private let client: AuthClient
 
-    init(configuration: SupabaseConfiguration) {
+    /// `storageKey` แยกที่เก็บ session ของแต่ละ client — ปกติไม่ต้องส่ง
+    /// ใช้ตอนต้องมีสองบัญชีพร้อมกันในโปรเซสเดียว (เช่นเทสที่ให้ผู้ถามกับหมอดูคุยกัน)
+    /// ถ้าไม่แยก การ login บัญชีที่สองจะทับ session ของบัญชีแรกใน Keychain
+    init(configuration: SupabaseConfiguration, storageKey: String? = nil) {
         client = AuthClient(
             url: configuration.url.appendingPathComponent("auth/v1"),
             headers: ["apikey": configuration.anonKey],
+            storageKey: storageKey,
             localStorage: AuthClient.Configuration.defaultLocalStorage
         )
     }

@@ -21,6 +21,7 @@
 		1A00000100000000000000A2 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 1A00000100000000000000B2 /* Realtime */; };
 		1A00000100000000000000F1 /* ChataAuthIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000F2 /* ChataAuthIntegrationTests.swift */; };
 		1A00000100000000000000E1 /* QuestionDraftPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */; };
+		1A0000010000000000000101 /* ChataRealtime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000102 /* ChataRealtime.swift */; };
 		1A00000100000000000000D1 /* ChataAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000D2 /* ChataAuth.swift */; };
 		1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001F /* HoroDataServiceTests.swift */; };
 		1A00000100000000000000A1 /* SupabaseConfig.plist in Resources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000A0 /* SupabaseConfig.plist */; };
@@ -50,6 +51,7 @@
 		1A000001000000000000001D /* MockHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHoroDataService.swift; sourceTree = "<group>"; };
 		1A000001000000000000001E /* SupabaseHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseHoroDataService.swift; sourceTree = "<group>"; };
 		1A00000100000000000000D2 /* ChataAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChataAuth.swift; sourceTree = "<group>"; };
+		1A0000010000000000000102 /* ChataRealtime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChataRealtime.swift; sourceTree = "<group>"; };
 		1A000001000000000000001F /* HoroDataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataServiceTests.swift; sourceTree = "<group>"; };
 		1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionDraftPolicyTests.swift; sourceTree = "<group>"; };
 		1A00000100000000000000F2 /* ChataAuthIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChataAuthIntegrationTests.swift; sourceTree = "<group>"; };
@@ -126,6 +128,7 @@
 				1A000001000000000000001D /* MockHoroDataService.swift */,
 				1A000001000000000000001E /* SupabaseHoroDataService.swift */,
 				1A00000100000000000000D2 /* ChataAuth.swift */,
+				1A0000010000000000000102 /* ChataRealtime.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -253,6 +256,7 @@
 				1A0000010000000000000009 /* MockHoroDataService.swift in Sources */,
 				1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */,
 				1A00000100000000000000D1 /* ChataAuth.swift in Sources */,
+				1A0000010000000000000101 /* ChataRealtime.swift in Sources */,
 				1A0000010000000000000003 /* RecordListViewModel.swift in Sources */,
 				1A0000010000000000000006 /* UserProfileViewModel.swift in Sources */,
 			);

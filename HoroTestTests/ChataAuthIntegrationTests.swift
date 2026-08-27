@@ -9,6 +9,7 @@ import XCTest
 /// ต้องรัน ./scripts/seed-dev-fixture.sh ก่อน
 final class ChataAuthIntegrationTests: XCTestCase {
     private var service: SupabaseHoroDataService!
+    private var configuration: SupabaseConfiguration!
 
     override func setUpWithError() throws {
         let environment = ProcessInfo.processInfo.environment
@@ -23,6 +24,7 @@ final class ChataAuthIntegrationTests: XCTestCase {
             throw XCTSkip("ไม่มีค่า Supabase ใน env — ข้ามชุด integration")
         }
 
+        self.configuration = configuration
         service = SupabaseHoroDataService(configuration: configuration)
     }
 
@@ -60,5 +62,41 @@ final class ChataAuthIntegrationTests: XCTestCase {
         } catch {
             // คาดหวัง unauthenticated — ไม่มี token ให้ใช้แล้ว
         }
+    }
+
+    /// พิสูจน์ว่าแชทเด้งเองจริงจากในแอป — ผู้ถาม subscribe แล้วให้หมอดูตอบจากอีกบัญชี
+    func testRealtimeDeliversTheSeerReplyToTheCustomer() async throws {
+        let customerID = try await service.signIn(email: "customer@horo.test", password: "HoroTest123!")
+        XCTAssertNotNil(customerID)
+
+        // บัญชีหมอดูต้องใช้ storage แยก ไม่งั้น login จะทับ session ของผู้ถามในโปรเซสเดียวกัน
+        let seerService = SupabaseHoroDataService(configuration: configuration, authStorageKey: "chata-test-seer")
+        let seerID = try await seerService.signIn(email: "seer@horo.test", password: "HoroTest123!")
+
+        // ต้องเจาะจง service ของหมอดู fixture — ถ้าหยิบใบแรกที่เจอ อาจไปได้หมอดูเก่าที่ค้างในฐาน
+        // แล้วหมอดูของเราจะตอบไม่ได้เพราะไม่ใช่คู่สนทนา (RLS ปฏิเสธ)
+        let listings = try await service.fetchSeerListings(matching: nil)
+        let seerListing = try XCTUnwrap(
+            listings.first(where: { $0.id == seerID && $0.serviceID != nil }),
+            "fixture ต้องมีหมอดู seer@horo.test ที่เปิด service"
+        )
+        let serviceID = try XCTUnwrap(seerListing.serviceID)
+
+        let draft = SupabaseQuestionDraft.startDraft(seerServiceID: serviceID, firstMessage: "ทดสอบ realtime จากในแอป")
+        let question = try await service.submitQuestion(draft)
+
+        let realtime = ChataRealtime(configuration: configuration, auth: service.auth)
+        let delivered = expectation(description: "ผู้ถามได้รับข้อความของหมอดูเอง")
+        delivered.assertForOverFulfill = false
+        await realtime.start { delivered.fulfill() }
+        _ = try await seerService.sendQuestionMessage(
+            questionID: question.questionID,
+            senderID: seerID,
+            body: "หมอดูตอบเพื่อทดสอบ realtime"
+        )
+
+        await fulfillment(of: [delivered], timeout: 20)
+        await realtime.stop()
+        try? await seerService.signOut()
     }
 }

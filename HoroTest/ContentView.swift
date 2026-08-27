@@ -2169,16 +2169,22 @@ private final class SupabaseAppViewModel: ObservableObject {
     @Published private(set) var questionStatuses: [UUID: String] = [:]
 
     private let service: SupabaseHoroDataService?
+    private let realtime: ChataRealtime?
+    /// chat store ที่ผูกอยู่ ณ ตอนนี้ — เก็บไว้ให้ realtime เรียกรีเฟรชได้เองโดยไม่ต้องส่งผ่านทุกครั้ง
+    private weak var boundChatStore: TestChatViewModel?
     private var signedInAccountID: UUID?
     @Published private(set) var signedInRole: OperationRole?
 
     init(configuration: SupabaseConfiguration? = .runtime) {
         if let configuration {
-            service = SupabaseHoroDataService(configuration: configuration)
+            let service = SupabaseHoroDataService(configuration: configuration)
+            self.service = service
+            realtime = ChataRealtime(configuration: configuration, auth: service.auth)
             isConfigured = true
             statusMessage = "Supabase settings loaded. Login will test the live database."
         } else {
             service = nil
+            realtime = nil
             isConfigured = false
             statusMessage = "Local mock mode. Add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to connect Supabase."
         }
@@ -2200,6 +2206,7 @@ private final class SupabaseAppViewModel: ObservableObject {
 
             signedInAccountID = userID
             signedInRole = testAccount.role
+            boundChatStore = chatStore
             isConnected = true
             statusMessage = "Supabase connected as \(account.role.rawValue)."
 
@@ -2207,6 +2214,7 @@ private final class SupabaseAppViewModel: ObservableObject {
             await refreshSeers()
             await refreshCoinPackages()
             await refreshConversations(chatStore: chatStore)
+            await startRealtime()
 
             return walletAvailableCoin
         } catch {
@@ -2336,6 +2344,25 @@ private final class SupabaseAppViewModel: ObservableObject {
         }
     }
 
+
+
+    /// เปิดท่อ realtime หลัง login — ข้อความใหม่/สถานะเปลี่ยน จะรีเฟรชเองโดยผู้ใช้ไม่ต้องดึงลง
+    private func startRealtime() async {
+        await realtime?.start { [weak self] in
+            await self?.reloadAfterRemoteChange()
+        }
+    }
+
+    func stopRealtime() async {
+        await realtime?.stop()
+        boundChatStore = nil
+    }
+
+    private func reloadAfterRemoteChange() async {
+        guard let boundChatStore else { return }
+        await refreshWallet()
+        await refreshConversations(chatStore: boundChatStore)
+    }
 
     /// สถานะของคำถามใบนี้เท่าที่ server บอกล่าสุด
     func status(ofQuestion id: UUID) -> String? {
