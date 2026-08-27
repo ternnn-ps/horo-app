@@ -167,6 +167,7 @@ private struct SeerWorkspaceView: View {
             NavigationStack {
                 DashboardPageView(
                     profile: profileViewModel.profile,
+                    payableCoin: supabaseApp.walletPayableCoin,
                     records: recordViewModel.records,
                     totalCount: recordViewModel.totalCount,
                     activeCount: recordViewModel.activeCount,
@@ -2635,6 +2636,7 @@ private struct CustomerHomeView: View {
                 CustomerHeroCard(
                     profile: profile,
                     coinBalance: supabaseApp.walletAvailableCoin ?? coinBalance,
+                    reservedCoin: supabaseApp.walletReservedCoin,
                     appLanguage: appLanguage,
                     onOpenChat: onOpenChat
                 )
@@ -2701,6 +2703,8 @@ private struct CustomerHomeView: View {
 private struct CustomerHeroCard: View {
     let profile: CustomerMockProfile
     let coinBalance: Int
+    /// เหรียญที่ถูกกันไว้ในงานที่ยังไม่ปิด — ต้องแสดงแยก ไม่งั้นผู้ใช้จะคิดว่าเหรียญหายไปเฉย ๆ
+    let reservedCoin: Int?
     let appLanguage: AppLanguage
     let onOpenChat: () -> Void
 
@@ -2732,6 +2736,13 @@ private struct CustomerHeroCard: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.orange)
                         .lineLimit(1)
+
+                    if let reservedCoin, reservedCoin > 0 {
+                        Text(appLanguage.text("· \(reservedCoin) held", "· กันไว้ \(reservedCoin)"))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.top, 2)
             }
@@ -4688,6 +4699,8 @@ private struct CustomerConversation: Identifiable {
 
 private struct DashboardPageView: View {
     let profile: UserProfile
+    /// ยอดค้างจ่ายของหมอดู — ขึ้นเมื่องานปิดแล้วเงินออกจาก escrow มาถึงเขาจริง
+    let payableCoin: Int?
     let records: [TestRecord]
     let totalCount: Int
     let activeCount: Int
@@ -4707,6 +4720,7 @@ private struct DashboardPageView: View {
             VStack(spacing: 18) {
                 SeerDashboardHeader(
                     profile: profile,
+                    payableCoin: payableCoin,
                     activeCount: activeCount,
                     appLanguage: appLanguage,
                     onViewProfile: onViewProfile
@@ -4755,6 +4769,7 @@ private struct DashboardPageView: View {
 
 private struct SeerDashboardHeader: View {
     let profile: UserProfile
+    let payableCoin: Int?
     let activeCount: Int
     let appLanguage: AppLanguage
     let onViewProfile: () -> Void
@@ -4785,6 +4800,17 @@ private struct SeerDashboardHeader: View {
                             .font(.caption.weight(.medium))
                     }
                     .foregroundStyle(.teal)
+
+                    if let payableCoin {
+                        HStack(spacing: 5) {
+                            HoroCoinIcon(size: 14)
+
+                            Text(appLanguage.text("\(payableCoin) coins payable", "ยอดค้างจ่าย \(payableCoin) เหรียญ"))
+                                .font(.caption.weight(.bold))
+                        }
+                        .foregroundStyle(.orange)
+                        .padding(.top, 2)
+                    }
                 }
 
                 Spacer(minLength: 8)
