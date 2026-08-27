@@ -276,5 +276,63 @@ else
 fi
 
 echo
+echo "── 7. Broadcast แบบ domain event: สถานะ question เปลี่ยน ต้องรู้ว่าเปลี่ยนจากอะไรเป็นอะไร"
+
+if ! command -v deno >/dev/null 2>&1; then
+  echo "  ⏭  ข้าม (ไม่มี deno ในเครื่อง)"
+else
+  BC_REQ=$(uuidgen | tr 'A-Z' 'a-z')
+  BC_MSG=$(uuidgen | tr 'A-Z' 'a-z')
+  BC=$(api "$USER_TOKEN" POST "rpc/submit_question" \
+    "{\"p_seer_service_id\":\"$SERVICE_ID\",\"p_first_message\":\"ทดสอบ broadcast\",\"p_client_message_id\":\"$BC_MSG\",\"p_client_request_id\":\"$BC_REQ\"}")
+  BC_ID=$(echo "$BC" | jq -r '.question_id // empty')
+
+  if [[ -z "$BC_ID" ]]; then
+    bad "เตรียมคำถามสำหรับทดสอบ broadcast" "$BC"
+  else
+    BC_OUT=$(mktemp)
+    deno run -A --quiet scripts/realtime-probe.ts \
+      "$SUPABASE_URL" "$ANON_KEY" "$USER_TOKEN" "$BC_ID" 12000 broadcast >"$BC_OUT" 2>&1 &
+    BC_PID=$!
+
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      grep -q "READY" "$BC_OUT" 2>/dev/null && break
+      perl -e 'select undef, undef, undef, 0.5'
+    done
+
+    api "$SEER_TOKEN" POST "question_message" \
+      "{\"question_id\":\"$BC_ID\",\"sender_id\":\"$SEER_ACCOUNT_ID\",\"client_message_id\":\"$(uuidgen | tr 'A-Z' 'a-z')\",\"message_type\":\"text\",\"content\":\"ตอบเพื่อให้สถานะเปลี่ยน\"}" >/dev/null
+
+    if wait $BC_PID; then
+      BC_EVENT=$(grep '^RECEIVED' "$BC_OUT" | sed 's/^RECEIVED //')
+      EVENT_NAME=$(echo "$BC_EVENT" | jq -r '.event // empty')
+      FROM=$(echo "$BC_EVENT" | jq -r '.payload.from // empty')
+      TO=$(echo "$BC_EVENT" | jq -r '.payload.to // empty')
+
+      [[ "$EVENT_NAME" == "status_changed" ]] && ok "ได้รับ event ชื่อ status_changed" \
+        || bad "ได้รับ event ชื่อ status_changed" "ได้ '$EVENT_NAME'"
+
+      if [[ "$FROM" == "submitted" && "$TO" == "active" ]]; then
+        ok "payload บอกได้ว่าเปลี่ยนจาก submitted → active (ไม่ใช่แค่ส่งแถวดิบมา)"
+      else
+        bad "payload บอกได้ว่าเปลี่ยนจาก submitted → active" "from='$FROM' to='$TO' · $BC_EVENT"
+      fi
+    else
+      bad "ผู้ใช้ได้รับ broadcast ของสถานะที่เปลี่ยน" "$(cat "$BC_OUT")"
+    fi
+
+    OUT_BC=$(mktemp)
+    deno run -A --quiet scripts/realtime-probe.ts \
+      "$SUPABASE_URL" "$ANON_KEY" "$OUTSIDER_TOKEN" "$BC_ID" 4000 broadcast >"$OUT_BC" 2>&1
+    if grep -q "RECEIVED" "$OUT_BC"; then
+      bad "คนนอกต้องไม่ได้รับ broadcast ของห้องคนอื่น" "$(cat "$OUT_BC")"
+    else
+      ok "คนนอกไม่ได้รับ broadcast ของห้องคนอื่น ($(head -1 "$OUT_BC"))"
+    fi
+    rm -f "$BC_OUT" "$OUT_BC"
+  fi
+fi
+
+echo
 echo "── สรุป: ผ่าน $PASS · ไม่ผ่าน $FAIL"
 [[ $FAIL -eq 0 ]]
