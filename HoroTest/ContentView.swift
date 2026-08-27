@@ -88,7 +88,7 @@ struct ContentView: View {
         .preferredColorScheme(selectedAppearance.colorScheme)
         .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
         .sheet(item: $editorMode) { mode in
-            RecordEditorView(mode: mode) { title, notes in
+            RecordEditorView(mode: mode, appLanguage: selectedLanguage) { title, notes in
                 switch mode {
                 case .create:
                     recordViewModel.create(title: title, notes: notes)
@@ -98,21 +98,21 @@ struct ContentView: View {
             }
         }
         .confirmationDialog(
-            "Delete Record",
+            selectedLanguage.text("Delete Record", "ลบบันทึก"),
             isPresented: $isDeleteConfirmationPresented,
             titleVisibility: .visible,
             presenting: recordPendingDeletion
         ) { record in
-            Button("Delete Record", role: .destructive) {
+            Button(selectedLanguage.text("Delete Record", "ลบบันทึก"), role: .destructive) {
                 recordViewModel.delete(record)
                 recordPendingDeletion = nil
             }
 
-            Button("Cancel", role: .cancel) {
+            Button(selectedLanguage.text("Cancel", "ยกเลิก"), role: .cancel) {
                 recordPendingDeletion = nil
             }
         } message: { record in
-            Text("Remove \"\(record.title)\" from this device?")
+            Text(selectedLanguage.text("Remove \"\(record.title)\" from this device?", "ต้องการลบ \"\(record.title)\" ออกจากเครื่องนี้หรือไม่?"))
         }
     }
 
@@ -156,11 +156,11 @@ private struct SeerWorkspaceView: View {
                     supabaseApp: supabaseApp,
                     appLanguage: appLanguage
                 )
-                    .navigationTitle("Chat")
+                    .navigationTitle(appLanguage.chatTitle)
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                Label(appLanguage.chatTitle, systemImage: "bubble.left.and.bubble.right.fill")
             }
             .tag(SeerTab.chat)
 
@@ -176,21 +176,22 @@ private struct SeerWorkspaceView: View {
                     onCreateRecord: onCreateRecord,
                     onEditRecord: onEditRecord,
                     onToggleRecord: { recordViewModel.toggleCompletion(for: $0) },
-                    onDeleteRecord: onDeleteRecord
+                    onDeleteRecord: onDeleteRecord,
+                    appLanguage: appLanguage
                 )
-                .navigationTitle("Dashboard")
+                .navigationTitle(appLanguage.dashboardTitle)
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(action: onCreateRecord) {
                             Image(systemName: "plus")
                         }
-                        .accessibilityLabel("Add Record")
+                        .accessibilityLabel(appLanguage.addRecordTitle)
                     }
                 }
             }
             .tabItem {
-                Label("Dashboard", systemImage: "chart.bar.xaxis")
+                Label(appLanguage.dashboardTitle, systemImage: "chart.bar.xaxis")
             }
             .tag(SeerTab.dashboard)
 
@@ -206,11 +207,11 @@ private struct SeerWorkspaceView: View {
                     testAccount: testAccount,
                     onLogout: onLogout
                 )
-                .navigationTitle("Profile")
+                .navigationTitle(appLanguage.profileTitle)
                 .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Profile", systemImage: "person.crop.circle.fill")
+                Label(appLanguage.profileTitle, systemImage: "person.crop.circle.fill")
             }
             .tag(SeerTab.profile)
         }
@@ -237,13 +238,14 @@ private struct CustomerWorkspaceView: View {
                     supabaseApp: supabaseApp,
                     chatStore: chatStore,
                     coinBalance: $coinBalance,
+                    appLanguage: appLanguage,
                     onOpenChat: { selectedTab = .chat }
                 )
-                    .navigationTitle("Home")
+                    .navigationTitle(appLanguage.homeTitle)
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Home", systemImage: "sparkles")
+                Label(appLanguage.homeTitle, systemImage: "sparkles")
             }
             .tag(CustomerTab.home)
 
@@ -253,11 +255,11 @@ private struct CustomerWorkspaceView: View {
                     supabaseApp: supabaseApp,
                     appLanguage: appLanguage
                 )
-                    .navigationTitle("Chat")
+                    .navigationTitle(appLanguage.chatTitle)
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                Label(appLanguage.chatTitle, systemImage: "bubble.left.and.bubble.right.fill")
             }
             .tag(CustomerTab.chat)
 
@@ -269,11 +271,11 @@ private struct CustomerWorkspaceView: View {
                     coinBalance: $coinBalance,
                     onLogout: onLogout
                 )
-                    .navigationTitle("Profile")
+                    .navigationTitle(appLanguage.profileTitle)
                     .navigationBarTitleDisplayMode(.large)
             }
             .tabItem {
-                Label("Profile", systemImage: "person.crop.circle.fill")
+                Label(appLanguage.profileTitle, systemImage: "person.crop.circle.fill")
             }
             .tag(CustomerTab.profile)
         }
@@ -300,13 +302,17 @@ private enum AppAppearance: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .system:
-            return "System"
+            return language.text("System", "ตามระบบ")
         case .light:
-            return "Light"
+            return language.text("Light", "โหมดสว่าง")
         case .dark:
-            return "Dark"
+            return language.text("Dark", "โหมดมืด")
         }
     }
 
@@ -392,6 +398,47 @@ private enum AppLanguage: String, CaseIterable, Identifiable {
             return "บัญชีทดสอบยังไม่ต้องใช้รหัสผ่าน"
         }
     }
+
+    var homeTitle: String {
+        text("Home", "หน้าแรก")
+    }
+
+    var chatTitle: String {
+        text("Chat", "แชท")
+    }
+
+    var dashboardTitle: String {
+        text("Dashboard", "แดชบอร์ด")
+    }
+
+    var profileTitle: String {
+        text("Profile", "โปรไฟล์")
+    }
+
+    var addRecordTitle: String {
+        text("Add Record", "เพิ่มบันทึก")
+    }
+
+    var editProfileTitle: String {
+        text("Edit Profile", "แก้ไขโปรไฟล์")
+    }
+
+    var saveTitle: String {
+        text("Save", "บันทึก")
+    }
+
+    var cancelTitle: String {
+        text("Cancel", "ยกเลิก")
+    }
+
+    func text(_ english: String, _ thai: String) -> String {
+        switch self {
+        case .english:
+            return english
+        case .thai:
+            return thai
+        }
+    }
 }
 
 private enum AppColors {
@@ -440,6 +487,19 @@ private extension ProfileAvatarStyle {
             return "sparkles"
         case .forest:
             return "leaf.fill"
+        }
+    }
+
+    func title(in language: AppLanguage) -> String {
+        switch self {
+        case .ocean:
+            return language.text(title, "มหาสมุทร")
+        case .sunrise:
+            return language.text(title, "พระอาทิตย์ขึ้น")
+        case .violet:
+            return language.text(title, "ไวโอเล็ต")
+        case .forest:
+            return language.text(title, "ป่าไม้")
         }
     }
 }
@@ -494,20 +554,28 @@ private enum OperationRole: String, CaseIterable, Identifiable {
     var loginKeyword: String { rawValue }
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .seer:
-            return "Seer"
+            return language.text("Seer", "หมอดู")
         case .customer:
-            return "Customer"
+            return language.text("Customer", "ลูกค้า")
         }
     }
 
     var subtitle: String {
+        subtitle(in: .english)
+    }
+
+    func subtitle(in language: AppLanguage) -> String {
         switch self {
         case .seer:
-            return "Handles readings, chat queue, and session notes"
+            return language.text("Handles readings, chat queue, and session notes", "จัดการคำทำนาย คิวแชท และบันทึกงาน")
         case .customer:
-            return "Requests guidance, chats, and tracks readings"
+            return language.text("Requests guidance, chats, and tracks readings", "ขอคำแนะนำ แชท และติดตามคำทำนาย")
         }
     }
 
@@ -585,7 +653,7 @@ private struct LoginView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    LoginHero()
+                    LoginHero(appLanguage: appLanguage)
 
                     VStack(spacing: 12) {
                         TextField(
@@ -617,7 +685,7 @@ private struct LoginView: View {
                         Button(action: submit) {
                             Label(
                                 requestedAccount.map {
-                                    appLanguage == .thai ? "เข้าสู่ระบบเป็น \($0.role.title)" : "Login as \($0.role.title)"
+                                    appLanguage == .thai ? "เข้าสู่ระบบเป็น \($0.role.title(in: appLanguage))" : "Login as \($0.role.title(in: appLanguage))"
                                 } ?? (appLanguage == .thai ? "เข้าสู่ระบบ" : "Login"),
                                 systemImage: "arrow.right.circle.fill"
                             )
@@ -642,7 +710,8 @@ private struct LoginView: View {
                             } label: {
                                 LoginRoleCard(
                                     account: account,
-                                    isSelected: requestedAccount == account
+                                    isSelected: requestedAccount == account,
+                                    appLanguage: appLanguage
                                 )
                             }
                             .buttonStyle(.plain)
@@ -661,7 +730,7 @@ private struct LoginView: View {
 
     private func submit() {
         guard let account = requestedAccount else {
-            validationMessage = "Use \"seer\" or \"customer\" to enter this mock app."
+            validationMessage = appLanguage.text("Use \"seer\" or \"customer\" to enter this mock app.", "พิมพ์ \"seer\" หรือ \"customer\" เพื่อเข้าสู่แอปทดสอบ")
             return
         }
 
@@ -671,6 +740,8 @@ private struct LoginView: View {
 }
 
 private struct LoginHero: View {
+    let appLanguage: AppLanguage
+
     var body: some View {
         VStack(spacing: 14) {
             ZStack {
@@ -693,7 +764,7 @@ private struct LoginHero: View {
                 Text("Horo")
                     .font(.largeTitle.bold())
 
-                Text("Mock role login for seer and customer spaces")
+                Text(appLanguage.text("Mock role login for seer and customer spaces", "หน้าล็อกอินทดสอบสำหรับหมอดูและลูกค้า"))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -707,6 +778,7 @@ private struct LoginHero: View {
 private struct LoginRoleCard: View {
     let account: TestAccount
     let isSelected: Bool
+    let appLanguage: AppLanguage
 
     private var role: OperationRole {
         account.role
@@ -729,7 +801,7 @@ private struct LoginRoleCard: View {
                     .font(.headline)
                     .foregroundStyle(.primary)
 
-                Text(account.subtitle)
+                Text(account.role.subtitle(in: appLanguage))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -757,6 +829,7 @@ private struct LoginRoleCard: View {
 
 private struct RoleOverviewSection: View {
     let activeRole: OperationRole
+    let appLanguage: AppLanguage
 
     private let columns = [
         GridItem(.flexible(), spacing: 12),
@@ -766,15 +839,16 @@ private struct RoleOverviewSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(
-                title: "Operation Roles",
-                subtitle: "Seer workspace is active"
+                title: appLanguage.text("Operation Roles", "บทบาทการใช้งาน"),
+                subtitle: appLanguage.text("Seer workspace is active", "พื้นที่ทำงานของหมอดูกำลังใช้งาน")
             )
 
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(OperationRole.allCases) { role in
                     OperationRoleCard(
                         role: role,
-                        isActive: role == activeRole
+                        isActive: role == activeRole,
+                        appLanguage: appLanguage
                     )
                 }
             }
@@ -785,6 +859,7 @@ private struct RoleOverviewSection: View {
 private struct OperationRoleCard: View {
     let role: OperationRole
     let isActive: Bool
+    let appLanguage: AppLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -796,15 +871,15 @@ private struct OperationRoleCard: View {
                 Spacer()
 
                 if isActive {
-                    StatusBadge(title: "Active", color: .green)
+                    StatusBadge(title: appLanguage.text("Active", "ใช้งานอยู่"), color: .green)
                 }
             }
 
-            Text(role.title)
+            Text(role.title(in: appLanguage))
                 .font(.headline)
                 .foregroundStyle(.primary)
 
-            Text(role.subtitle)
+            Text(role.subtitle(in: appLanguage))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
@@ -854,16 +929,20 @@ private struct ChatHomeView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                ChatOperationsHeader(profile: profile)
+                ChatOperationsHeader(profile: profile, appLanguage: appLanguage)
 
                 DataConnectionBanner(
                     message: supabaseApp.statusMessage,
                     isConnected: supabaseApp.isConnected
                 )
 
-                QueueMetricsRow(conversations: conversations)
+                QueueMetricsRow(conversations: conversations, appLanguage: appLanguage)
 
-                ConversationSearchField(text: $searchText)
+                ConversationSearchField(
+                    text: $searchText,
+                    placeholder: appLanguage.text("Search customer or reading", "ค้นหาลูกค้าหรือคำทำนาย"),
+                    clearLabel: appLanguage.text("Clear Search", "ล้างการค้นหา")
+                )
 
                 SectionHeader(
                     title: queueTitle,
@@ -878,10 +957,11 @@ private struct ChatHomeView: View {
                                 chatStore: chatStore,
                                 supabaseApp: supabaseApp,
                                 seerName: profile.fullName,
-                                seerInitials: profile.initials
+                                seerInitials: profile.initials,
+                                appLanguage: appLanguage
                             )
                         } label: {
-                            InboxRow(conversation: conversation)
+                            InboxRow(conversation: conversation, appLanguage: appLanguage)
                         }
                         .buttonStyle(.plain)
                     }
@@ -897,6 +977,7 @@ private struct ChatHomeView: View {
 
 private struct ChatOperationsHeader: View {
     let profile: UserProfile
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 14) {
@@ -904,17 +985,17 @@ private struct ChatOperationsHeader: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text("Seer Desk")
+                    Text(appLanguage.text("Seer Desk", "โต๊ะหมอดู"))
                         .font(.headline)
 
-                    StatusBadge(title: "Online", color: .green)
+                    StatusBadge(title: appLanguage.text("Online", "ออนไลน์"), color: .green)
                 }
 
                 Text(profile.fullName)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Text("Customer reading queue")
+                Text(appLanguage.text("Customer reading queue", "คิวคำทำนายของลูกค้า"))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -932,6 +1013,7 @@ private struct ChatOperationsHeader: View {
 
 private struct QueueMetricsRow: View {
     let conversations: [ChatConversation]
+    let appLanguage: AppLanguage
 
     private var waitingCount: Int {
         conversations.filter { $0.status == .waiting }.count
@@ -944,21 +1026,21 @@ private struct QueueMetricsRow: View {
     var body: some View {
         HStack(spacing: 10) {
             QueueMetricTile(
-                title: "Waiting",
+                title: appLanguage.text("Waiting", "รอคิว"),
                 value: "\(waitingCount)",
                 icon: "clock.badge.exclamationmark",
                 color: .orange
             )
 
             QueueMetricTile(
-                title: "Priority",
+                title: appLanguage.text("Priority", "สำคัญ"),
                 value: "\(highPriorityCount)",
                 icon: "exclamationmark.triangle.fill",
                 color: .red
             )
 
             QueueMetricTile(
-                title: "Open",
+                title: appLanguage.text("Open", "เปิดอยู่"),
                 value: "\(conversations.count)",
                 icon: "bubble.left.and.bubble.right.fill",
                 color: .blue
@@ -998,10 +1080,12 @@ private struct ConversationSearchField: View {
     @Binding var text: String
 
     let placeholder: String
+    let clearLabel: String
 
-    init(text: Binding<String>, placeholder: String = "Search customer or reading") {
+    init(text: Binding<String>, placeholder: String = "Search customer or reading", clearLabel: String = "Clear Search") {
         _text = text
         self.placeholder = placeholder
+        self.clearLabel = clearLabel
     }
 
     var body: some View {
@@ -1021,7 +1105,7 @@ private struct ConversationSearchField: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear Search")
+                .accessibilityLabel(clearLabel)
             }
         }
         .padding(.horizontal, 14)
@@ -1037,6 +1121,7 @@ private struct ConversationSearchField: View {
 
 private struct InboxRow: View {
     let conversation: ChatConversation
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -1077,13 +1162,13 @@ private struct InboxRow: View {
 
                 HStack(spacing: 6) {
                     ConversationMetaChip(
-                        title: conversation.status.title,
+                        title: conversation.status.title(in: appLanguage),
                         color: conversation.status.color,
                         icon: conversation.status.icon
                     )
 
                     ConversationMetaChip(
-                        title: conversation.priority.title,
+                        title: conversation.priority.title(in: appLanguage),
                         color: conversation.priority.color,
                         icon: conversation.priority.icon
                     )
@@ -1201,6 +1286,7 @@ private struct MockChatDetailView: View {
     @ObservedObject var supabaseApp: SupabaseAppViewModel
     let seerName: String
     let seerInitials: String
+    let appLanguage: AppLanguage
 
     @State private var draft = ""
 
@@ -1210,7 +1296,7 @@ private struct MockChatDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatCustomerHeader(conversation: conversation)
+            ChatCustomerHeader(conversation: conversation, appLanguage: appLanguage)
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -1238,8 +1324,10 @@ private struct MockChatDetailView: View {
 
             ChatComposer(
                 draft: $draft,
-                placeholder: "Message customer",
+                placeholder: appLanguage.text("Message customer", "ส่งข้อความถึงลูกค้า"),
                 quickReplies: conversation.quickReplies,
+                attachLabel: appLanguage.text("Attach File", "แนบไฟล์"),
+                sendLabel: appLanguage.text("Send Message", "ส่งข้อความ"),
                 onSend: sendMessage
             )
         }
@@ -1252,13 +1340,13 @@ private struct MockChatDetailView: View {
                 } label: {
                     Image(systemName: "phone.fill")
                 }
-                .accessibilityLabel("Call Customer")
+                .accessibilityLabel(appLanguage.text("Call Customer", "โทรหาลูกค้า"))
 
                 Button {
                 } label: {
                     Image(systemName: "checkmark.circle")
                 }
-                .accessibilityLabel("Resolve Conversation")
+                .accessibilityLabel(appLanguage.text("Resolve Conversation", "ปิดงานสนทนา"))
             }
         }
     }
@@ -1303,6 +1391,7 @@ private struct MockChatDetailView: View {
 
 private struct ChatCustomerHeader: View {
     let conversation: ChatConversation
+    let appLanguage: AppLanguage
 
     var body: some View {
         VStack(spacing: 12) {
@@ -1316,13 +1405,13 @@ private struct ChatCustomerHeader: View {
                             .lineLimit(1)
 
                         ConversationMetaChip(
-                            title: conversation.status.title,
+                            title: conversation.status.title(in: appLanguage),
                             color: conversation.status.color,
                             icon: conversation.status.icon
                         )
                     }
 
-                    Text("\(conversation.customerId) • \(conversation.accountTier) member")
+                    Text("\(conversation.customerId) • \(conversation.accountTier) \(appLanguage.text("member", "สมาชิก"))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -1338,7 +1427,7 @@ private struct ChatCustomerHeader: View {
 
             HStack(spacing: 8) {
                 ConversationMetaChip(
-                    title: conversation.priority.title,
+                    title: conversation.priority.title(in: appLanguage),
                     color: conversation.priority.color,
                     icon: conversation.priority.icon
                 )
@@ -1459,7 +1548,25 @@ private struct ChatComposer: View {
 
     let placeholder: String
     let quickReplies: [String]
+    let attachLabel: String
+    let sendLabel: String
     let onSend: () -> Void
+
+    init(
+        draft: Binding<String>,
+        placeholder: String,
+        quickReplies: [String],
+        attachLabel: String = "Attach File",
+        sendLabel: String = "Send Message",
+        onSend: @escaping () -> Void
+    ) {
+        _draft = draft
+        self.placeholder = placeholder
+        self.quickReplies = quickReplies
+        self.attachLabel = attachLabel
+        self.sendLabel = sendLabel
+        self.onSend = onSend
+    }
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1492,7 +1599,7 @@ private struct ChatComposer: View {
                         .frame(width: 38, height: 38)
                 }
                 .buttonStyle(.bordered)
-                .accessibilityLabel("Attach File")
+                .accessibilityLabel(attachLabel)
 
                 TextField(placeholder, text: $draft, axis: .vertical)
                     .lineLimit(1...4)
@@ -1508,7 +1615,7 @@ private struct ChatComposer: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canSend)
-                .accessibilityLabel("Send Message")
+                .accessibilityLabel(sendLabel)
             }
             .padding(.horizontal, 12)
         }
@@ -1553,13 +1660,17 @@ private enum ConversationStatus {
     case followUp
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .waiting:
-            return "Waiting"
+            return language.text("Waiting", "รอคิว")
         case .active:
-            return "Active"
+            return language.text("Active", "กำลังดำเนินการ")
         case .followUp:
-            return "Follow Up"
+            return language.text("Follow Up", "ติดตามผล")
         }
     }
 
@@ -1592,13 +1703,17 @@ private enum ConversationPriority: Equatable {
     case vip
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .normal:
-            return "Normal"
+            return language.text("Normal", "ปกติ")
         case .high:
-            return "High"
+            return language.text("High", "สำคัญ")
         case .vip:
-            return "VIP"
+            return language.text("VIP", "VIP")
         }
     }
 
@@ -2277,6 +2392,7 @@ private struct CustomerHomeView: View {
     @ObservedObject var supabaseApp: SupabaseAppViewModel
     @ObservedObject var chatStore: TestChatViewModel
     @Binding var coinBalance: Int
+    let appLanguage: AppLanguage
 
     let onOpenChat: () -> Void
 
@@ -2307,6 +2423,7 @@ private struct CustomerHomeView: View {
                 CustomerHeroCard(
                     profile: profile,
                     coinBalance: supabaseApp.walletAvailableCoin ?? coinBalance,
+                    appLanguage: appLanguage,
                     onOpenChat: onOpenChat
                 )
 
@@ -2315,26 +2432,27 @@ private struct CustomerHomeView: View {
                     isConnected: supabaseApp.isConnected
                 )
 
-                CustomerHomeMenuPicker(selection: $selectedMenu)
+                CustomerHomeMenuPicker(selection: $selectedMenu, appLanguage: appLanguage)
 
                 switch selectedMenu {
                 case .overview:
-                    CustomerReadingStatusCard(reading: readings[0])
+                    CustomerReadingStatusCard(reading: readings[0], appLanguage: appLanguage)
 
                     CustomerActionGrid(
+                        appLanguage: appLanguage,
                         onOpenChat: onOpenChat,
                         onFindSeer: { selectedMenu = .findSeer }
                     )
 
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(
-                            title: "Upcoming Guidance",
-                            subtitle: "Mock customer requests and reading history"
+                            title: appLanguage.text("Upcoming Guidance", "คำแนะนำถัดไป"),
+                            subtitle: appLanguage.text("Mock customer requests and reading history", "คำขอและประวัติคำทำนายทดสอบ")
                         )
 
                         LazyVStack(spacing: 10) {
                             ForEach(readings) { reading in
-                                CustomerReadingRow(reading: reading)
+                                CustomerReadingRow(reading: reading, appLanguage: appLanguage)
                             }
                         }
                     }
@@ -2344,6 +2462,7 @@ private struct CustomerHomeView: View {
                         chatStore: chatStore,
                         coinBalance: $coinBalance,
                         seers: Array(seers.prefix(2)),
+                        appLanguage: appLanguage,
                         onOpenChat: onOpenChat
                     )
                 case .findSeer:
@@ -2354,6 +2473,7 @@ private struct CustomerHomeView: View {
                         coinBalance: $coinBalance,
                         seers: filteredSeers,
                         allSeerCount: seers.count,
+                        appLanguage: appLanguage,
                         onOpenChat: onOpenChat
                     )
                 }
@@ -2369,6 +2489,7 @@ private struct CustomerHomeView: View {
 private struct CustomerHeroCard: View {
     let profile: CustomerMockProfile
     let coinBalance: Int
+    let appLanguage: AppLanguage
     let onOpenChat: () -> Void
 
     var body: some View {
@@ -2377,7 +2498,7 @@ private struct CustomerHeroCard: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text("Customer Space")
+                    Text(appLanguage.text("Customer Space", "พื้นที่ลูกค้า"))
                         .font(.headline)
 
                     StatusBadge(title: profile.memberTier, color: .indigo)
@@ -2387,7 +2508,7 @@ private struct CustomerHeroCard: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Text("Next insight window: \(profile.nextInsightWindow)")
+                Text(appLanguage.text("Next insight window: \(profile.nextInsightWindow)", "รอบคำแนะนำถัดไป: \(profile.nextInsightWindow)"))
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.teal)
                     .lineLimit(1)
@@ -2395,7 +2516,7 @@ private struct CustomerHeroCard: View {
                 HStack(spacing: 5) {
                     HoroCoinIcon(size: 16)
 
-                    Text("\(coinBalance) coins")
+                    Text(appLanguage.text("\(coinBalance) coins", "\(coinBalance) เหรียญ"))
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.orange)
                         .lineLimit(1)
@@ -2411,7 +2532,7 @@ private struct CustomerHeroCard: View {
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.borderedProminent)
-            .accessibilityLabel("Open Chat")
+            .accessibilityLabel(appLanguage.text("Open Chat", "เปิดแชท"))
         }
         .padding(16)
         .cardStyle()
@@ -2420,6 +2541,7 @@ private struct CustomerHeroCard: View {
 
 private struct CustomerReadingStatusCard: View {
     let reading: CustomerReading
+    let appLanguage: AppLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -2435,14 +2557,14 @@ private struct CustomerReadingStatusCard: View {
                 .frame(width: 52, height: 52)
 
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Active Reading")
+                    Text(appLanguage.text("Active Reading", "คำทำนายที่กำลังดำเนินการ"))
                         .font(.caption.weight(.bold))
                         .foregroundStyle(reading.color)
 
-                    Text(reading.title)
+                    Text(reading.title(in: appLanguage))
                         .font(.headline)
 
-                    Text(reading.subtitle)
+                    Text(reading.subtitle(in: appLanguage))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -2452,8 +2574,8 @@ private struct CustomerReadingStatusCard: View {
             }
 
             HStack(spacing: 8) {
-                ConversationMetaChip(title: reading.status, color: reading.color, icon: "sparkles")
-                ConversationMetaChip(title: reading.timeframe, color: .blue, icon: "calendar")
+                ConversationMetaChip(title: reading.status(in: appLanguage), color: reading.color, icon: "sparkles")
+                ConversationMetaChip(title: reading.timeframe(in: appLanguage), color: .blue, icon: "calendar")
             }
         }
         .padding(16)
@@ -2462,6 +2584,7 @@ private struct CustomerReadingStatusCard: View {
 }
 
 private struct CustomerActionGrid: View {
+    let appLanguage: AppLanguage
     let onOpenChat: () -> Void
     let onFindSeer: () -> Void
 
@@ -2473,32 +2596,32 @@ private struct CustomerActionGrid: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 10) {
             CustomerActionTile(
-                title: "Ask Seer",
-                subtitle: "Start a chat",
+                title: appLanguage.text("Ask Seer", "ถามหมอดู"),
+                subtitle: appLanguage.text("Start a chat", "เริ่มแชท"),
                 icon: "bubble.left.and.bubble.right.fill",
                 color: .teal,
                 action: onOpenChat
             )
 
             CustomerActionTile(
-                title: "Find Seer",
-                subtitle: "Search guides",
+                title: appLanguage.text("Find Seer", "ค้นหาหมอดู"),
+                subtitle: appLanguage.text("Search guides", "ค้นหาผู้แนะนำ"),
                 icon: "person.2.fill",
                 color: .purple,
                 action: onFindSeer
             )
 
             CustomerActionTile(
-                title: "Daily Card",
-                subtitle: "Preview insight",
+                title: appLanguage.text("Daily Card", "ไพ่ประจำวัน"),
+                subtitle: appLanguage.text("Preview insight", "ดูคำแนะนำสั้น ๆ"),
                 icon: "rectangle.stack.fill",
                 color: .orange,
                 action: {}
             )
 
             CustomerActionTile(
-                title: "Saved Notes",
-                subtitle: "3 entries",
+                title: appLanguage.text("Saved Notes", "บันทึกที่เก็บไว้"),
+                subtitle: appLanguage.text("3 entries", "3 รายการ"),
                 icon: "bookmark.fill",
                 color: .blue,
                 action: {}
@@ -2542,6 +2665,7 @@ private struct CustomerActionTile: View {
 
 private struct CustomerReadingRow: View {
     let reading: CustomerReading
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 12) {
@@ -2556,12 +2680,12 @@ private struct CustomerReadingRow: View {
             .frame(width: 42, height: 42)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(reading.title)
+                Text(reading.title(in: appLanguage))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text(reading.subtitle)
+                Text(reading.subtitle(in: appLanguage))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -2569,7 +2693,7 @@ private struct CustomerReadingRow: View {
 
             Spacer()
 
-            Text(reading.status)
+            Text(reading.status(in: appLanguage))
                 .font(.caption.weight(.bold))
                 .foregroundStyle(reading.color)
         }
@@ -2585,11 +2709,15 @@ private enum CustomerHomeMenu: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .overview:
-            return "Overview"
+            return language.text("Overview", "ภาพรวม")
         case .findSeer:
-            return "Find Seer"
+            return language.text("Find Seer", "ค้นหาหมอดู")
         }
     }
 
@@ -2605,6 +2733,7 @@ private enum CustomerHomeMenu: String, CaseIterable, Identifiable {
 
 private struct CustomerHomeMenuPicker: View {
     @Binding var selection: CustomerHomeMenu
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 6) {
@@ -2614,7 +2743,7 @@ private struct CustomerHomeMenuPicker: View {
                         selection = menu
                     }
                 } label: {
-                    Label(menu.title, systemImage: menu.icon)
+                    Label(menu.title(in: appLanguage), systemImage: menu.icon)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -2625,7 +2754,7 @@ private struct CustomerHomeMenuPicker: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(menu.title)
+                .accessibilityLabel(menu.title(in: appLanguage))
             }
         }
         .padding(4)
@@ -2644,13 +2773,14 @@ private struct CustomerFeaturedSeersPreview: View {
     @Binding var coinBalance: Int
 
     let seers: [CustomerSeer]
+    let appLanguage: AppLanguage
     let onOpenChat: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(
-                title: "Suggested Seers",
-                subtitle: "Popular guides based on your recent focus"
+                title: appLanguage.text("Suggested Seers", "หมอดูแนะนำ"),
+                subtitle: appLanguage.text("Popular guides based on your recent focus", "ผู้แนะนำยอดนิยมตามเรื่องที่คุณสนใจ")
             )
 
             LazyVStack(spacing: 12) {
@@ -2661,6 +2791,7 @@ private struct CustomerFeaturedSeersPreview: View {
                             supabaseApp: supabaseApp,
                             chatStore: chatStore,
                             coinBalance: $coinBalance,
+                            appLanguage: appLanguage,
                             onOpenChat: onOpenChat
                         )
                     } label: {
@@ -2681,6 +2812,7 @@ private struct CustomerSeerDiscoveryView: View {
 
     let seers: [CustomerSeer]
     let allSeerCount: Int
+    let appLanguage: AppLanguage
     let onOpenChat: () -> Void
 
     private let columns = [
@@ -2691,13 +2823,14 @@ private struct CustomerSeerDiscoveryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(
-                title: "Find Seer",
-                subtitle: "\(seers.count) of \(allSeerCount) mock seers"
+                title: appLanguage.text("Find Seer", "ค้นหาหมอดู"),
+                subtitle: appLanguage.text("\(seers.count) of \(allSeerCount) mock seers", "พบ \(seers.count) จาก \(allSeerCount) รายการ")
             )
 
             ConversationSearchField(
                 text: $searchText,
-                placeholder: "Search seer, skill, or style"
+                placeholder: appLanguage.text("Search seer, skill, or style", "ค้นหาหมอดู ทักษะ หรือสไตล์"),
+                clearLabel: appLanguage.text("Clear Search", "ล้างการค้นหา")
             )
 
             if seers.isEmpty {
@@ -2706,10 +2839,10 @@ private struct CustomerSeerDiscoveryView: View {
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-                    Text("No seers found")
+                    Text(appLanguage.text("No seers found", "ไม่พบหมอดู"))
                         .font(.headline)
 
-                    Text("Try a skill like relationship, tarot, career, or astrology.")
+                    Text(appLanguage.text("Try a skill like relationship, tarot, career, or astrology.", "ลองค้นหาทักษะ เช่น ความรัก ไพ่ทาโรต์ งาน หรือโหราศาสตร์"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -2726,6 +2859,7 @@ private struct CustomerSeerDiscoveryView: View {
                                 supabaseApp: supabaseApp,
                                 chatStore: chatStore,
                                 coinBalance: $coinBalance,
+                                appLanguage: appLanguage,
                                 onOpenChat: onOpenChat
                             )
                         } label: {
@@ -2943,12 +3077,13 @@ private struct CustomerSeerProfileView: View {
     @ObservedObject var supabaseApp: SupabaseAppViewModel
     @ObservedObject var chatStore: TestChatViewModel
     @Binding var coinBalance: Int
+    let appLanguage: AppLanguage
 
     let onOpenChat: () -> Void
 
     @State private var isAddFundsSheetPresented = false
     @State private var activeNotice: CustomerSeerActionNotice?
-    @State private var topUpReason = "Add THB to coins before starting a seer call."
+    @State private var topUpReason = ""
 
     private let skillColumns = [
         GridItem(.adaptive(minimum: 112), spacing: 8)
@@ -2960,10 +3095,11 @@ private struct CustomerSeerProfileView: View {
                 CustomerSeerProfileHero(
                     seer: seer,
                     coinBalance: coinBalance,
+                    appLanguage: appLanguage,
                     onBookReading: bookReading,
                     onMessage: messageSeer,
                     onAddCoins: {
-                        topUpReason = "Add THB to coins to book or call \(seer.name)."
+                        topUpReason = appLanguage.text("Add THB to coins to book or call \(seer.name).", "เติม THB เป็นเหรียญเพื่อจองหรือโทรหา \(seer.name)")
                         isAddFundsSheetPresented = true
                     }
                 )
@@ -2971,13 +3107,14 @@ private struct CustomerSeerProfileView: View {
                 SeerCallOptionsSection(
                     seer: seer,
                     coinBalance: coinBalance,
+                    appLanguage: appLanguage,
                     onSelect: handleCallOption
                 )
 
                 VStack(alignment: .leading, spacing: 12) {
                     SectionHeader(
-                        title: "Skills",
-                        subtitle: "What this seer can help with"
+                        title: appLanguage.text("Skills", "ทักษะ"),
+                        subtitle: appLanguage.text("What this seer can help with", "เรื่องที่หมอดูคนนี้ช่วยได้")
                     )
 
                     LazyVGrid(columns: skillColumns, alignment: .leading, spacing: 8) {
@@ -2990,8 +3127,8 @@ private struct CustomerSeerProfileView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     SectionHeader(
-                        title: "Styles",
-                        subtitle: "How the reading usually feels"
+                        title: appLanguage.text("Styles", "สไตล์การดู"),
+                        subtitle: appLanguage.text("How the reading usually feels", "บรรยากาศของคำทำนาย")
                     )
 
                     LazyVStack(spacing: 10) {
@@ -3003,8 +3140,8 @@ private struct CustomerSeerProfileView: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     SectionHeader(
-                        title: "Profile",
-                        subtitle: "Mock seer introduction"
+                        title: appLanguage.text("Profile", "โปรไฟล์"),
+                        subtitle: appLanguage.text("Mock seer introduction", "แนะนำหมอดูแบบทดสอบ")
                     )
 
                     Text(seer.bio)
@@ -3026,22 +3163,23 @@ private struct CustomerSeerProfileView: View {
         .sheet(isPresented: $isAddFundsSheetPresented) {
             AddFundsSheet(
                 coinBalance: $coinBalance,
-                reason: topUpReason
+                reason: topUpReason.isEmpty ? appLanguage.text("Add THB to coins before starting a seer call.", "เติม THB เป็นเหรียญก่อนเริ่มโทรหาหมอดู") : topUpReason,
+                appLanguage: appLanguage
             )
         }
         .alert(item: $activeNotice) { notice in
             Alert(
                 title: Text(notice.title),
                 message: Text(notice.message),
-                dismissButton: .default(Text("OK"))
+                dismissButton: .default(Text(appLanguage.text("OK", "ตกลง")))
             )
         }
     }
 
     private func bookReading() {
         activeNotice = CustomerSeerActionNotice(
-            title: "Booking Requested",
-            message: "A mock reading request was sent to \(seer.name)."
+            title: appLanguage.text("Booking Requested", "ส่งคำขอจองแล้ว"),
+            message: appLanguage.text("A mock reading request was sent to \(seer.name).", "ส่งคำขอทำนายทดสอบไปหา \(seer.name) แล้ว")
         )
     }
 
@@ -3049,14 +3187,14 @@ private struct CustomerSeerProfileView: View {
         Task {
             let didStartLiveQuestion = await supabaseApp.startQuestion(
                 with: seer,
-                firstMessage: "Hi \(seer.name), I would like to start a reading.",
+                firstMessage: appLanguage.text("Hi \(seer.name), I would like to start a reading.", "สวัสดี \(seer.name) ฉันอยากเริ่มดูดวง"),
                 chatStore: chatStore
             )
 
             if !didStartLiveQuestion {
                 chatStore.startConversation(
                     with: seer,
-                    firstMessage: "Hi \(seer.name), I would like to start a reading."
+                    firstMessage: appLanguage.text("Hi \(seer.name), I would like to start a reading.", "สวัสดี \(seer.name) ฉันอยากเริ่มดูดวง")
                 )
             }
         }
@@ -3066,15 +3204,15 @@ private struct CustomerSeerProfileView: View {
 
     private func handleCallOption(_ option: SeerCallOption) {
         guard coinBalance >= option.coinCost else {
-            topUpReason = "\(option.title) with \(seer.name) requires \(option.coinCost) coins."
+            topUpReason = appLanguage.text("\(option.title(in: appLanguage)) with \(seer.name) requires \(option.coinCost) coins.", "\(option.title(in: appLanguage)) กับ \(seer.name) ต้องใช้ \(option.coinCost) เหรียญ")
             isAddFundsSheetPresented = true
             return
         }
 
         coinBalance -= option.coinCost
         activeNotice = CustomerSeerActionNotice(
-            title: "Call Booked",
-            message: "\(option.title) with \(seer.name) is booked. \(option.coinCost) coins were used."
+            title: appLanguage.text("Call Booked", "จองสายแล้ว"),
+            message: appLanguage.text("\(option.title(in: appLanguage)) with \(seer.name) is booked. \(option.coinCost) coins were used.", "จอง \(option.title(in: appLanguage)) กับ \(seer.name) แล้ว ใช้ \(option.coinCost) เหรียญ")
         )
     }
 }
@@ -3082,6 +3220,7 @@ private struct CustomerSeerProfileView: View {
 private struct CustomerSeerProfileHero: View {
     let seer: CustomerSeer
     let coinBalance: Int
+    let appLanguage: AppLanguage
     let onBookReading: () -> Void
     let onMessage: () -> Void
     let onAddCoins: () -> Void
@@ -3106,16 +3245,16 @@ private struct CustomerSeerProfileHero: View {
             }
 
             HStack(spacing: 8) {
-                ConversationMetaChip(title: "\(seer.rating) rating", color: .yellow, icon: "star.fill")
-                ConversationMetaChip(title: "\(seer.reviewCount) reviews", color: .blue, icon: "text.bubble.fill")
+                ConversationMetaChip(title: appLanguage.text("\(seer.rating) rating", "คะแนน \(seer.rating)"), color: .yellow, icon: "star.fill")
+                ConversationMetaChip(title: appLanguage.text("\(seer.reviewCount) reviews", "\(seer.reviewCount) รีวิว"), color: .blue, icon: "text.bubble.fill")
                 ConversationMetaChip(title: seer.nextAvailable, color: .green, icon: "clock.fill")
             }
 
             HStack(spacing: 8) {
-                CoinMetaChip(title: "\(coinBalance) coins", color: .indigo)
+                CoinMetaChip(title: appLanguage.text("\(coinBalance) coins", "\(coinBalance) เหรียญ"), color: .indigo)
 
                 Button(action: onAddCoins) {
-                    Label("Add Coins", systemImage: "plus.circle.fill")
+                    Label(appLanguage.text("Add Coins", "เติมเหรียญ"), systemImage: "plus.circle.fill")
                         .font(.caption.weight(.bold))
                 }
                 .buttonStyle(.bordered)
@@ -3123,14 +3262,14 @@ private struct CustomerSeerProfileHero: View {
 
             HStack(spacing: 10) {
                 Button(action: onMessage) {
-                    Label("Message", systemImage: "bubble.left.and.bubble.right.fill")
+                    Label(appLanguage.text("Message", "ส่งข้อความ"), systemImage: "bubble.left.and.bubble.right.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
                 Button(action: onBookReading) {
-                    Label("Book", systemImage: "calendar.badge.plus")
+                    Label(appLanguage.text("Book", "จอง"), systemImage: "calendar.badge.plus")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -3145,6 +3284,7 @@ private struct CustomerSeerProfileHero: View {
 private struct SeerCallOptionsSection: View {
     let seer: CustomerSeer
     let coinBalance: Int
+    let appLanguage: AppLanguage
     let onSelect: (SeerCallOption) -> Void
 
     private let columns = [
@@ -3154,8 +3294,8 @@ private struct SeerCallOptionsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(
-                title: "Call Seer",
-                subtitle: "Calls use your in-app coins"
+                title: appLanguage.text("Call Seer", "โทรหาหมอดู"),
+                subtitle: appLanguage.text("Calls use your in-app coins", "การโทรใช้เหรียญในแอป")
             )
 
             LazyVGrid(columns: columns, spacing: 10) {
@@ -3172,7 +3312,7 @@ private struct SeerCallOptionsSection: View {
                                 HoroCoinIcon(size: 22)
                             }
 
-                            Text(option.title)
+                            Text(option.title(in: appLanguage))
                                 .font(.headline)
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
@@ -3181,7 +3321,7 @@ private struct SeerCallOptionsSection: View {
                             HStack(spacing: 5) {
                                 HoroCoinIcon(size: 14)
 
-                                Text("\(option.coinCost) coins")
+                                Text(appLanguage.text("\(option.coinCost) coins", "\(option.coinCost) เหรียญ"))
                                     .font(.caption.weight(.bold))
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.82)
@@ -3193,7 +3333,7 @@ private struct SeerCallOptionsSection: View {
                         .cardStyle(borderColor: seer.tint.opacity(0.28))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Book \(option.title)")
+                    .accessibilityLabel(appLanguage.text("Book \(option.title(in: appLanguage))", "จอง \(option.title(in: appLanguage))"))
                 }
             }
         }
@@ -3208,13 +3348,17 @@ private enum SeerCallOption: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .fifteen:
-            return "15 mins"
+            return language.text("15 mins", "15 นาที")
         case .thirty:
-            return "30 mins"
+            return language.text("30 mins", "30 นาที")
         case .sixty:
-            return "1 hr"
+            return language.text("1 hr", "1 ชม.")
         }
     }
 
@@ -3304,10 +3448,11 @@ private struct CustomerChatSpaceView: View {
                                 CustomerChatDetailView(
                                     conversationID: conversation.id,
                                     chatStore: chatStore,
-                                    supabaseApp: supabaseApp
+                                    supabaseApp: supabaseApp,
+                                    appLanguage: appLanguage
                                 )
                             } label: {
-                                CustomerConversationRow(conversation: conversation)
+                                CustomerConversationRow(conversation: conversation, appLanguage: appLanguage)
                             }
                             .buttonStyle(.plain)
                         }
@@ -3324,6 +3469,7 @@ private struct CustomerChatSpaceView: View {
 
 private struct CustomerConversationRow: View {
     let conversation: ChatConversation
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -3358,7 +3504,7 @@ private struct CustomerConversationRow: View {
                     .lineLimit(2)
 
                 ConversationMetaChip(
-                    title: conversation.status.title,
+                    title: conversation.status.title(in: appLanguage),
                     color: conversation.tint,
                     icon: "sparkles"
                 )
@@ -3378,6 +3524,7 @@ private struct CustomerChatDetailView: View {
     let conversationID: UUID
     @ObservedObject var chatStore: TestChatViewModel
     @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
 
     @State private var draft = ""
 
@@ -3387,7 +3534,7 @@ private struct CustomerChatDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            CustomerChatHeader(conversation: conversation)
+            CustomerChatHeader(conversation: conversation, appLanguage: appLanguage)
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -3413,8 +3560,10 @@ private struct CustomerChatDetailView: View {
 
             ChatComposer(
                 draft: $draft,
-                placeholder: "Message seer",
+                placeholder: appLanguage.text("Message seer", "ส่งข้อความถึงหมอดู"),
                 quickReplies: conversation.quickReplies,
+                attachLabel: appLanguage.text("Attach File", "แนบไฟล์"),
+                sendLabel: appLanguage.text("Send Message", "ส่งข้อความ"),
                 onSend: sendMessage
             )
         }
@@ -3463,6 +3612,7 @@ private struct CustomerChatDetailView: View {
 
 private struct CustomerChatHeader: View {
     let conversation: ChatConversation
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 12) {
@@ -3482,7 +3632,7 @@ private struct CustomerChatHeader: View {
                     .lineLimit(1)
 
                 ConversationMetaChip(
-                    title: conversation.status.title,
+                    title: conversation.status.title(in: appLanguage),
                     color: conversation.tint,
                     icon: "sparkles"
                 )
@@ -3578,7 +3728,7 @@ private struct CustomerProfileSpaceView: View {
                             .foregroundStyle(.secondary)
 
                         HStack(spacing: 8) {
-                            StatusBadge(title: "Customer", color: .indigo)
+                            StatusBadge(title: appLanguage.text("Customer", "ลูกค้า"), color: .indigo)
                             StatusBadge(title: profileDetails.memberTier, color: .teal)
                         }
                         .padding(.top, 4)
@@ -3590,36 +3740,37 @@ private struct CustomerProfileSpaceView: View {
 
                 CustomerWalletSection(
                     coinBalance: coinBalance,
+                    appLanguage: appLanguage,
                     onAddCoins: { isAddFundsSheetPresented = true }
                 )
 
                 VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "Account", subtitle: "Mock customer information")
+                    SectionHeader(title: appLanguage.text("Account", "บัญชี"), subtitle: appLanguage.text("Mock customer information", "ข้อมูลลูกค้าแบบทดสอบ"))
 
                     VStack(spacing: 0) {
-                        ProfileDetailRow(icon: "person.text.rectangle", title: "Test Login", value: testAccount.login)
+                        ProfileDetailRow(icon: "person.text.rectangle", title: appLanguage.text("Test Login", "ล็อกอินทดสอบ"), value: testAccount.login, appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "at", title: "Test Email", value: testAccount.email)
+                        ProfileDetailRow(icon: "at", title: appLanguage.text("Test Email", "อีเมลทดสอบ"), value: testAccount.email, appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "envelope", title: "Email", value: editableProfile.email)
+                        ProfileDetailRow(icon: "envelope", title: appLanguage.text("Email", "อีเมล"), value: editableProfile.email, appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "sparkles", title: "Focus", value: profileDetails.focus)
+                        ProfileDetailRow(icon: "sparkles", title: appLanguage.text("Focus", "เรื่องที่สนใจ"), value: profileDetails.focus(in: appLanguage), appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "calendar", title: "Birth Info", value: editableProfile.location)
+                        ProfileDetailRow(icon: "calendar", title: appLanguage.text("Birth Info", "ข้อมูลเกิด"), value: editableProfile.location, appLanguage: appLanguage)
                     }
                     .padding(.vertical, 4)
                     .cardStyle()
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "Preferences", subtitle: appLanguage.profilePreferenceSubtitle)
+                    SectionHeader(title: appLanguage.text("Preferences", "การตั้งค่า"), subtitle: appLanguage.profilePreferenceSubtitle)
 
                     VStack(spacing: 0) {
-                        ProfileDetailRow(icon: "bell.badge", title: "Reading Alerts", value: "Enabled")
+                        ProfileDetailRow(icon: "bell.badge", title: appLanguage.text("Reading Alerts", "แจ้งเตือนคำทำนาย"), value: appLanguage.text("Enabled", "เปิดใช้งาน"), appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "lock.shield", title: "Role Access", value: "Customer")
+                        ProfileDetailRow(icon: "lock.shield", title: appLanguage.text("Role Access", "สิทธิ์บทบาท"), value: appLanguage.text("Customer", "ลูกค้า"), appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
-                        AppearancePickerRow(selection: $appAppearance)
+                        AppearancePickerRow(selection: $appAppearance, appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
                         LanguagePickerRow(selection: $appLanguage)
                     }
@@ -3627,7 +3778,7 @@ private struct CustomerProfileSpaceView: View {
                     .cardStyle()
                 }
 
-                ProfileLogoutButton(action: onLogout)
+                ProfileLogoutButton(appLanguage: appLanguage, action: onLogout)
             }
             .padding(16)
             .padding(.bottom, 8)
@@ -3639,18 +3790,20 @@ private struct CustomerProfileSpaceView: View {
                 NavigationLink {
                     ProfileEditorView(
                         profile: editableProfile,
+                        appLanguage: appLanguage,
                         onSave: { editableProfile = $0 }
                     )
                 } label: {
                     Image(systemName: "pencil")
                 }
-                .accessibilityLabel("Edit Profile")
+                .accessibilityLabel(appLanguage.editProfileTitle)
             }
         }
         .sheet(isPresented: $isAddFundsSheetPresented) {
             AddFundsSheet(
                 coinBalance: $coinBalance,
-                reason: "Add THB to get coins for readings and seer calls."
+                reason: appLanguage.text("Add THB to get coins for readings and seer calls.", "เติม THB เพื่อรับเหรียญสำหรับคำทำนายและการโทรหาหมอดู"),
+                appLanguage: appLanguage
             )
         }
     }
@@ -3658,21 +3811,22 @@ private struct CustomerProfileSpaceView: View {
 
 private struct CustomerWalletSection: View {
     let coinBalance: Int
+    let appLanguage: AppLanguage
     let onAddCoins: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Coin Wallet", subtitle: "Add THB to get in-app coins")
+            SectionHeader(title: appLanguage.text("Coin Wallet", "กระเป๋าเหรียญ"), subtitle: appLanguage.text("Add THB to get in-app coins", "เติม THB เพื่อรับเหรียญในแอป"))
 
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
                     HoroCoinIcon(size: 52)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(coinBalance) coins")
+                        Text(appLanguage.text("\(coinBalance) coins", "\(coinBalance) เหรียญ"))
                             .font(.title3.bold().monospacedDigit())
 
-                        Text("Coins are used for seer calls and paid readings")
+                        Text(appLanguage.text("Coins are used for seer calls and paid readings", "เหรียญใช้สำหรับโทรหาหมอดูและคำทำนายแบบชำระเงิน"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -3681,7 +3835,7 @@ private struct CustomerWalletSection: View {
                 }
 
                 Button(action: onAddCoins) {
-                    Label("Add THB to Coins", systemImage: "plus.circle.fill")
+                    Label(appLanguage.text("Add THB to Coins", "เติม THB เป็นเหรียญ"), systemImage: "plus.circle.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -3697,6 +3851,7 @@ private struct AddFundsSheet: View {
     @Binding var coinBalance: Int
 
     let reason: String
+    let appLanguage: AppLanguage
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedOption = WalletTopUpOption.options[1]
@@ -3708,7 +3863,7 @@ private struct AddFundsSheet: View {
             ScrollView {
                 VStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Current Balance")
+                        Text(appLanguage.text("Current Balance", "ยอดคงเหลือปัจจุบัน"))
                             .font(.caption.weight(.bold))
                             .foregroundStyle(.secondary)
 
@@ -3718,7 +3873,7 @@ private struct AddFundsSheet: View {
                             Text("\(coinBalance)")
                                 .font(.largeTitle.bold().monospacedDigit())
 
-                            Text("coins")
+                            Text(appLanguage.text("coins", "เหรียญ"))
                                 .font(.headline)
                                 .foregroundStyle(.secondary)
                         }
@@ -3733,7 +3888,7 @@ private struct AddFundsSheet: View {
                     .cardStyle(borderColor: Color.orange.opacity(0.34))
 
                     VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Top Up", subtitle: "Pay THB and receive in-app coins")
+                        SectionHeader(title: appLanguage.text("Top Up", "เติมเงิน"), subtitle: appLanguage.text("Pay THB and receive in-app coins", "ชำระ THB แล้วรับเหรียญในแอป"))
 
                         LazyVStack(spacing: 10) {
                             ForEach(WalletTopUpOption.options) { option in
@@ -3742,7 +3897,8 @@ private struct AddFundsSheet: View {
                                 } label: {
                                     WalletTopUpOptionRow(
                                         option: option,
-                                        isSelected: selectedOption == option
+                                        isSelected: selectedOption == option,
+                                        appLanguage: appLanguage
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -3751,7 +3907,7 @@ private struct AddFundsSheet: View {
                     }
 
                     VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: "Payment", subtitle: "Mock payment method")
+                        SectionHeader(title: appLanguage.text("Payment", "การชำระเงิน"), subtitle: appLanguage.text("Mock payment method", "วิธีชำระเงินทดสอบ"))
 
                         LazyVStack(spacing: 10) {
                             ForEach(MockPaymentMethod.allCases) { method in
@@ -3760,7 +3916,8 @@ private struct AddFundsSheet: View {
                                 } label: {
                                     MockPaymentMethodRow(
                                         method: method,
-                                        isSelected: selectedMethod == method
+                                        isSelected: selectedMethod == method,
+                                        appLanguage: appLanguage
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -3771,9 +3928,9 @@ private struct AddFundsSheet: View {
                     Button(action: completePayment) {
                         HStack(spacing: 8) {
                             Image(systemName: "lock.fill")
-                            Text("Pay \(selectedOption.priceLabel)")
+                            Text(appLanguage.text("Pay \(selectedOption.priceLabel)", "ชำระ \(selectedOption.priceLabel)"))
                             HoroCoinIcon(size: 18)
-                            Text("+\(selectedOption.coins) coins")
+                            Text(appLanguage.text("+\(selectedOption.coins) coins", "+\(selectedOption.coins) เหรียญ"))
                         }
                         .font(.headline)
                         .lineLimit(1)
@@ -3788,21 +3945,21 @@ private struct AddFundsSheet: View {
             }
             .scrollIndicators(.hidden)
             .background(AppBackground())
-            .navigationTitle("Add Coins")
+            .navigationTitle(appLanguage.text("Add Coins", "เติมเหรียญ"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
+                    Button(appLanguage.text("Close", "ปิด")) {
                         dismiss()
                     }
                 }
             }
-            .alert("Payment Complete", isPresented: $didCompletePayment) {
-                Button("Done") {
+            .alert(appLanguage.text("Payment Complete", "ชำระเงินสำเร็จ"), isPresented: $didCompletePayment) {
+                Button(appLanguage.text("Done", "เสร็จ")) {
                     dismiss()
                 }
             } message: {
-                Text("\(selectedOption.coins) coins were added after paying \(selectedOption.priceLabel) with \(selectedMethod.title).")
+                Text(appLanguage.text("\(selectedOption.coins) coins were added after paying \(selectedOption.priceLabel) with \(selectedMethod.title(in: appLanguage)).", "เพิ่ม \(selectedOption.coins) เหรียญหลังชำระ \(selectedOption.priceLabel) ด้วย \(selectedMethod.title(in: appLanguage))"))
             }
         }
     }
@@ -3816,6 +3973,7 @@ private struct AddFundsSheet: View {
 private struct WalletTopUpOptionRow: View {
     let option: WalletTopUpOption
     let isSelected: Bool
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 12) {
@@ -3826,11 +3984,11 @@ private struct WalletTopUpOptionRow: View {
             HoroCoinIcon(size: 32)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(option.coins) coins")
+                Text(appLanguage.text("\(option.coins) coins", "\(option.coins) เหรียญ"))
                     .font(.headline)
                     .foregroundStyle(.primary)
 
-                Text(option.subtitle)
+                Text(option.subtitle(in: appLanguage))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -3851,6 +4009,19 @@ private struct WalletTopUpOption: Identifiable, Equatable {
     let coins: Int
     let priceLabel: String
     let subtitle: String
+
+    func subtitle(in language: AppLanguage) -> String {
+        switch id {
+        case "starter":
+            return language.text(subtitle, "แพ็กเริ่มต้นสำหรับสายสั้น")
+        case "popular":
+            return language.text(subtitle, "แพ็กยอดนิยมสำหรับแชทและสาย 30 นาที")
+        case "deep":
+            return language.text(subtitle, "แพ็กอ่านดวงเชิงลึกสำหรับเวลานาน")
+        default:
+            return subtitle
+        }
+    }
 
     static let options = [
         WalletTopUpOption(
@@ -3883,15 +4054,19 @@ private enum MockPaymentMethod: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .applePay:
             return "Apple Pay"
         case .card:
-            return "Card"
+            return language.text("Card", "บัตร")
         case .qrPayment:
-            return "QR Payment"
+            return language.text("QR Payment", "ชำระผ่าน QR")
         case .promo:
-            return "Promo"
+            return language.text("Promo", "โค้ดโปรโมชัน")
         }
     }
 
@@ -3912,6 +4087,7 @@ private enum MockPaymentMethod: String, CaseIterable, Identifiable {
 private struct MockPaymentMethodRow: View {
     let method: MockPaymentMethod
     let isSelected: Bool
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 12) {
@@ -3920,7 +4096,7 @@ private struct MockPaymentMethodRow: View {
                 .foregroundStyle(isSelected ? .teal : .secondary)
                 .frame(width: 28)
 
-            Text(method.title)
+            Text(method.title(in: appLanguage))
                 .font(.headline)
                 .foregroundStyle(.primary)
 
@@ -3951,6 +4127,10 @@ private struct CustomerMockProfile {
             location: birthInfo,
             avatarStyle: .sunrise
         )
+    }
+
+    func focus(in language: AppLanguage) -> String {
+        language.text(focus, "ความรักและจังหวะเวลา")
     }
 
     static let `default` = CustomerMockProfile(
@@ -4118,6 +4298,58 @@ private struct CustomerReading: Identifiable {
     let icon: String
     let color: Color
 
+    func title(in language: AppLanguage) -> String {
+        switch title {
+        case "Relationship Timing":
+            return language.text(title, "จังหวะความรัก")
+        case "Career Crossroads":
+            return language.text(title, "ทางแยกเรื่องงาน")
+        case "Daily Energy":
+            return language.text(title, "พลังงานประจำวัน")
+        default:
+            return title
+        }
+    }
+
+    func subtitle(in language: AppLanguage) -> String {
+        switch title {
+        case "Relationship Timing":
+            return language.text(subtitle, "Aurora กำลังเตรียมคำทำนายถัดไปของคุณ")
+        case "Career Crossroads":
+            return language.text(subtitle, "คำแนะนำที่บันทึกไว้จากครั้งก่อน")
+        case "Daily Energy":
+            return language.text(subtitle, "พรีวิวไพ่สั้น ๆ สำหรับเช้านี้")
+        default:
+            return subtitle
+        }
+    }
+
+    func status(in language: AppLanguage) -> String {
+        switch status {
+        case "In Progress":
+            return language.text(status, "กำลังดำเนินการ")
+        case "Saved":
+            return language.text(status, "บันทึกแล้ว")
+        case "Ready":
+            return language.text(status, "พร้อมแล้ว")
+        default:
+            return status
+        }
+    }
+
+    func timeframe(in language: AppLanguage) -> String {
+        switch timeframe {
+        case "Today":
+            return language.text(timeframe, "วันนี้")
+        case "Yesterday":
+            return language.text(timeframe, "เมื่อวาน")
+        case "Daily":
+            return language.text(timeframe, "รายวัน")
+        default:
+            return timeframe
+        }
+    }
+
     static let mockReadings = [
         CustomerReading(
             title: "Relationship Timing",
@@ -4247,6 +4479,7 @@ private struct DashboardPageView: View {
     let onEditRecord: (TestRecord) -> Void
     let onToggleRecord: (TestRecord) -> Void
     let onDeleteRecord: (TestRecord) -> Void
+    let appLanguage: AppLanguage
 
     private let conversations = ChatConversation.mockConversations
 
@@ -4256,31 +4489,35 @@ private struct DashboardPageView: View {
                 SeerDashboardHeader(
                     profile: profile,
                     activeCount: activeCount,
+                    appLanguage: appLanguage,
                     onViewProfile: onViewProfile
                 )
 
-                RoleOverviewSection(activeRole: .seer)
+                RoleOverviewSection(activeRole: .seer, appLanguage: appLanguage)
 
                 OperationsMetricsGrid(
                     queueCount: conversations.count,
                     activeCount: activeCount,
-                    completedCount: completedCount
+                    completedCount: completedCount,
+                    appLanguage: appLanguage
                 )
 
                 WorkQueuePreview(
                     conversations: Array(conversations.prefix(2)),
+                    appLanguage: appLanguage,
                     onOpenChat: onOpenChat
                 )
 
-                RecordsSectionHeader(onCreate: onCreateRecord)
+                RecordsSectionHeader(onCreate: onCreateRecord, appLanguage: appLanguage)
 
                 if records.isEmpty {
-                    EmptyRecordsView(onCreate: onCreateRecord)
+                    EmptyRecordsView(onCreate: onCreateRecord, appLanguage: appLanguage)
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(records) { record in
                             RecordCard(
                                 record: record,
+                                appLanguage: appLanguage,
                                 onEdit: { onEditRecord(record) },
                                 onToggle: { onToggleRecord(record) },
                                 onDelete: { onDeleteRecord(record) }
@@ -4300,6 +4537,7 @@ private struct DashboardPageView: View {
 private struct SeerDashboardHeader: View {
     let profile: UserProfile
     let activeCount: Int
+    let appLanguage: AppLanguage
     let onViewProfile: () -> Void
 
     var body: some View {
@@ -4309,11 +4547,11 @@ private struct SeerDashboardHeader: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        Text("Seer Operation")
+                        Text(appLanguage.text("Seer Operation", "งานหมอดู"))
                             .font(.headline)
                             .foregroundStyle(.primary)
 
-                        StatusBadge(title: "On Duty", color: .green)
+                        StatusBadge(title: appLanguage.text("On Duty", "กำลังปฏิบัติงาน"), color: .green)
                     }
 
                     Text(profile.fullName)
@@ -4324,7 +4562,7 @@ private struct SeerDashboardHeader: View {
                         Image(systemName: "folder.badge.gearshape")
                             .font(.caption2)
 
-                        Text("\(activeCount) active reading notes")
+                        Text(appLanguage.text("\(activeCount) active reading notes", "บันทึกที่กำลังทำ \(activeCount) รายการ"))
                             .font(.caption.weight(.medium))
                     }
                     .foregroundStyle(.teal)
@@ -4347,6 +4585,7 @@ private struct OperationsMetricsGrid: View {
     let queueCount: Int
     let activeCount: Int
     let completedCount: Int
+    let appLanguage: AppLanguage
 
     private let columns = [
         GridItem(.flexible(), spacing: 10),
@@ -4356,9 +4595,9 @@ private struct OperationsMetricsGrid: View {
 
     var body: some View {
         LazyVGrid(columns: columns, spacing: 10) {
-            MetricTile(title: "Queue", value: queueCount, color: .blue, icon: "person.2.wave.2.fill")
-            MetricTile(title: "Active", value: activeCount, color: .teal, icon: "timer")
-            MetricTile(title: "Done", value: completedCount, color: .green, icon: "checkmark.seal")
+            MetricTile(title: appLanguage.text("Queue", "คิว"), value: queueCount, color: .blue, icon: "person.2.wave.2.fill")
+            MetricTile(title: appLanguage.text("Active", "กำลังทำ"), value: activeCount, color: .teal, icon: "timer")
+            MetricTile(title: appLanguage.text("Done", "เสร็จแล้ว"), value: completedCount, color: .green, icon: "checkmark.seal")
         }
     }
 }
@@ -4393,14 +4632,15 @@ private struct MetricTile: View {
 
 private struct WorkQueuePreview: View {
     let conversations: [ChatConversation]
+    let appLanguage: AppLanguage
     let onOpenChat: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 SectionHeader(
-                    title: "Priority Queue",
-                    subtitle: "Customer readings needing seer action"
+                    title: appLanguage.text("Priority Queue", "คิวสำคัญ"),
+                    subtitle: appLanguage.text("Customer readings needing seer action", "คำทำนายที่รอหมอดูดำเนินการ")
                 )
 
                 Spacer()
@@ -4409,12 +4649,12 @@ private struct WorkQueuePreview: View {
                     Image(systemName: "arrow.right.circle.fill")
                         .font(.title3)
                 }
-                .accessibilityLabel("Open Chat")
+                .accessibilityLabel(appLanguage.text("Open Chat", "เปิดแชท"))
             }
 
             LazyVStack(spacing: 10) {
                 ForEach(conversations) { conversation in
-                    QueuePreviewRow(conversation: conversation)
+                    QueuePreviewRow(conversation: conversation, appLanguage: appLanguage)
                 }
             }
         }
@@ -4423,6 +4663,7 @@ private struct WorkQueuePreview: View {
 
 private struct QueuePreviewRow: View {
     let conversation: ChatConversation
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 12) {
@@ -4443,7 +4684,7 @@ private struct QueuePreviewRow: View {
             Spacer()
 
             ConversationMetaChip(
-                title: conversation.priority.title,
+                title: conversation.priority.title(in: appLanguage),
                 color: conversation.priority.color,
                 icon: conversation.priority.icon
             )
@@ -4455,12 +4696,13 @@ private struct QueuePreviewRow: View {
 
 private struct RecordsSectionHeader: View {
     let onCreate: () -> Void
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack {
             SectionHeader(
-                title: "Reading Notes",
-                subtitle: "Create, update, complete, or delete seer notes"
+                title: appLanguage.text("Reading Notes", "บันทึกคำทำนาย"),
+                subtitle: appLanguage.text("Create, update, complete, or delete seer notes", "สร้าง แก้ไข ทำเสร็จ หรือลบบันทึกงานหมอดู")
             )
 
             Spacer()
@@ -4469,7 +4711,7 @@ private struct RecordsSectionHeader: View {
                 Image(systemName: "plus.circle.fill")
                     .font(.title2)
             }
-            .accessibilityLabel("Add Record")
+            .accessibilityLabel(appLanguage.addRecordTitle)
         }
         .padding(.top, 2)
     }
@@ -4477,6 +4719,7 @@ private struct RecordsSectionHeader: View {
 
 private struct EmptyRecordsView: View {
     let onCreate: () -> Void
+    let appLanguage: AppLanguage
 
     var body: some View {
         VStack(spacing: 16) {
@@ -4485,17 +4728,17 @@ private struct EmptyRecordsView: View {
                 .foregroundStyle(.blue)
 
             VStack(spacing: 6) {
-                Text("No Records Yet")
+                Text(appLanguage.text("No Records Yet", "ยังไม่มีบันทึก"))
                     .font(.title3.bold())
 
-                Text("Add the first seer note for this mock reading flow.")
+                Text(appLanguage.text("Add the first seer note for this mock reading flow.", "เพิ่มบันทึกแรกสำหรับขั้นตอนคำทำนายทดสอบ"))
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
 
             Button(action: onCreate) {
-                Label("Add Record", systemImage: "plus.circle.fill")
+                Label(appLanguage.addRecordTitle, systemImage: "plus.circle.fill")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
@@ -4508,6 +4751,7 @@ private struct EmptyRecordsView: View {
 
 private struct RecordCard: View {
     let record: TestRecord
+    let appLanguage: AppLanguage
     let onEdit: () -> Void
     let onToggle: () -> Void
     let onDelete: () -> Void
@@ -4520,7 +4764,7 @@ private struct RecordCard: View {
                     .foregroundStyle(record.isCompleted ? .green : .secondary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(record.isCompleted ? "Reopen Record" : "Complete Record")
+            .accessibilityLabel(record.isCompleted ? appLanguage.text("Reopen Record", "เปิดบันทึกอีกครั้ง") : appLanguage.text("Complete Record", "ทำบันทึกเสร็จ"))
 
             Button(action: onEdit) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -4532,7 +4776,7 @@ private struct RecordCard: View {
                             .lineLimit(2)
 
                         if record.isCompleted {
-                            StatusBadge(title: "Done", color: .green)
+                            StatusBadge(title: appLanguage.text("Done", "เสร็จแล้ว"), color: .green)
                         }
                     }
 
@@ -4558,18 +4802,18 @@ private struct RecordCard: View {
 
             Menu {
                 Button(action: onEdit) {
-                    Label("Edit", systemImage: "pencil")
+                    Label(appLanguage.text("Edit", "แก้ไข"), systemImage: "pencil")
                 }
 
                 Button(action: onToggle) {
                     Label(
-                        record.isCompleted ? "Reopen" : "Mark Done",
+                        record.isCompleted ? appLanguage.text("Reopen", "เปิดอีกครั้ง") : appLanguage.text("Mark Done", "ทำเสร็จ"),
                         systemImage: record.isCompleted ? "arrow.uturn.left.circle" : "checkmark.circle"
                     )
                 }
 
                 Button(role: .destructive, action: onDelete) {
-                    Label("Delete", systemImage: "trash")
+                    Label(appLanguage.text("Delete", "ลบ"), systemImage: "trash")
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -4577,24 +4821,24 @@ private struct RecordCard: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 34, height: 34)
             }
-            .accessibilityLabel("Record Actions")
+            .accessibilityLabel(appLanguage.text("Record Actions", "เมนูบันทึก"))
         }
         .padding(14)
         .cardStyle(borderColor: record.isCompleted ? Color.green.opacity(0.35) : AppColors.border)
         .contextMenu {
             Button(action: onEdit) {
-                Label("Edit", systemImage: "pencil")
+                Label(appLanguage.text("Edit", "แก้ไข"), systemImage: "pencil")
             }
 
             Button(action: onToggle) {
                 Label(
-                    record.isCompleted ? "Reopen" : "Mark Done",
+                    record.isCompleted ? appLanguage.text("Reopen", "เปิดอีกครั้ง") : appLanguage.text("Mark Done", "ทำเสร็จ"),
                     systemImage: record.isCompleted ? "arrow.uturn.left.circle" : "checkmark.circle"
                 )
             }
 
             Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
+                Label(appLanguage.text("Delete", "ลบ"), systemImage: "trash")
             }
         }
     }
@@ -4616,19 +4860,21 @@ private struct ProfilePageView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                ProfileHeroCard(profile: profileViewModel.profile)
+                ProfileHeroCard(profile: profileViewModel.profile, appLanguage: appLanguage)
 
-                RoleOverviewSection(activeRole: .seer)
+                RoleOverviewSection(activeRole: .seer, appLanguage: appLanguage)
 
                 ProfileContactSection(
                     profile: profileViewModel.profile,
-                    testAccount: testAccount
+                    testAccount: testAccount,
+                    appLanguage: appLanguage
                 )
 
                 ProfileActivitySection(
                     totalCount: totalCount,
                     activeCount: activeCount,
                     completedCount: completedCount,
+                    appLanguage: appLanguage,
                     onCreateRecord: onCreateRecord
                 )
 
@@ -4637,7 +4883,7 @@ private struct ProfilePageView: View {
                     appLanguage: $appLanguage
                 )
 
-                ProfileLogoutButton(action: onLogout)
+                ProfileLogoutButton(appLanguage: appLanguage, action: onLogout)
             }
             .padding(16)
             .padding(.bottom, 8)
@@ -4649,12 +4895,13 @@ private struct ProfilePageView: View {
                 NavigationLink {
                     ProfileEditorView(
                         profile: profileViewModel.profile,
+                        appLanguage: appLanguage,
                         onSave: { profileViewModel.update(profile: $0) }
                     )
                 } label: {
                     Image(systemName: "pencil")
                 }
-                .accessibilityLabel("Edit Profile")
+                .accessibilityLabel(appLanguage.editProfileTitle)
             }
         }
     }
@@ -4662,6 +4909,7 @@ private struct ProfilePageView: View {
 
 private struct ProfileHeroCard: View {
     let profile: UserProfile
+    let appLanguage: AppLanguage
 
     var body: some View {
         VStack(spacing: 14) {
@@ -4682,8 +4930,8 @@ private struct ProfileHeroCard: View {
                     .multilineTextAlignment(.center)
 
                 HStack(spacing: 8) {
-                    StatusBadge(title: "Seer", color: .teal)
-                    StatusBadge(title: "On Duty", color: .green)
+                    StatusBadge(title: appLanguage.text("Seer", "หมอดู"), color: .teal)
+                    StatusBadge(title: appLanguage.text("On Duty", "กำลังปฏิบัติงาน"), color: .green)
                 }
                 .padding(.top, 4)
             }
@@ -4697,21 +4945,22 @@ private struct ProfileHeroCard: View {
 private struct ProfileContactSection: View {
     let profile: UserProfile
     let testAccount: TestAccount
+    let appLanguage: AppLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Contact", subtitle: "Seer profile detail")
+            SectionHeader(title: appLanguage.text("Contact", "ติดต่อ"), subtitle: appLanguage.text("Seer profile detail", "รายละเอียดโปรไฟล์หมอดู"))
 
             VStack(spacing: 0) {
-                ProfileDetailRow(icon: "person.text.rectangle", title: "Test Login", value: testAccount.login)
+                ProfileDetailRow(icon: "person.text.rectangle", title: appLanguage.text("Test Login", "ล็อกอินทดสอบ"), value: testAccount.login, appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "at", title: "Test Email", value: testAccount.email)
+                ProfileDetailRow(icon: "at", title: appLanguage.text("Test Email", "อีเมลทดสอบ"), value: testAccount.email, appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "envelope", title: "Email", value: profile.email)
+                ProfileDetailRow(icon: "envelope", title: appLanguage.text("Email", "อีเมล"), value: profile.email, appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "phone", title: "Phone", value: profile.phone)
+                ProfileDetailRow(icon: "phone", title: appLanguage.text("Phone", "โทรศัพท์"), value: profile.phone, appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "location", title: "Location", value: profile.location)
+                ProfileDetailRow(icon: "location", title: appLanguage.text("Location", "ที่อยู่"), value: profile.location, appLanguage: appLanguage)
             }
             .padding(.vertical, 4)
             .cardStyle()
@@ -4723,12 +4972,13 @@ private struct ProfileActivitySection: View {
     let totalCount: Int
     let activeCount: Int
     let completedCount: Int
+    let appLanguage: AppLanguage
     let onCreateRecord: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                SectionHeader(title: "Activity", subtitle: "Local reading notes")
+                SectionHeader(title: appLanguage.text("Activity", "กิจกรรม"), subtitle: appLanguage.text("Local reading notes", "บันทึกคำทำนายในเครื่อง"))
 
                 Spacer()
 
@@ -4736,15 +4986,15 @@ private struct ProfileActivitySection: View {
                     Image(systemName: "plus.circle.fill")
                         .font(.title3)
                 }
-                .accessibilityLabel("Add Record")
+                .accessibilityLabel(appLanguage.addRecordTitle)
             }
 
             VStack(spacing: 0) {
-                ProfileDetailRow(icon: "square.stack.3d.up", title: "Total Records", value: "\(totalCount)")
+                ProfileDetailRow(icon: "square.stack.3d.up", title: appLanguage.text("Total Records", "บันทึกทั้งหมด"), value: "\(totalCount)", appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "timer", title: "Active Records", value: "\(activeCount)")
+                ProfileDetailRow(icon: "timer", title: appLanguage.text("Active Records", "บันทึกที่กำลังทำ"), value: "\(activeCount)", appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "checkmark.seal", title: "Completed", value: "\(completedCount)")
+                ProfileDetailRow(icon: "checkmark.seal", title: appLanguage.text("Completed", "เสร็จแล้ว"), value: "\(completedCount)", appLanguage: appLanguage)
             }
             .padding(.vertical, 4)
             .cardStyle()
@@ -4758,14 +5008,14 @@ private struct ProfileSettingsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Workspace", subtitle: appLanguage.profilePreferenceSubtitle)
+            SectionHeader(title: appLanguage.text("Workspace", "พื้นที่ทำงาน"), subtitle: appLanguage.profilePreferenceSubtitle)
 
             VStack(spacing: 0) {
-                ProfileDetailRow(icon: "bell.badge", title: "Queue Alerts", value: "Enabled")
+                ProfileDetailRow(icon: "bell.badge", title: appLanguage.text("Queue Alerts", "แจ้งเตือนคิว"), value: appLanguage.text("Enabled", "เปิดใช้งาน"), appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "lock.shield", title: "Role Access", value: "Seer")
+                ProfileDetailRow(icon: "lock.shield", title: appLanguage.text("Role Access", "สิทธิ์บทบาท"), value: appLanguage.text("Seer", "หมอดู"), appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
-                AppearancePickerRow(selection: $appAppearance)
+                AppearancePickerRow(selection: $appAppearance, appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
                 LanguagePickerRow(selection: $appLanguage)
             }
@@ -4777,6 +5027,7 @@ private struct ProfileSettingsSection: View {
 
 private struct AppearancePickerRow: View {
     @Binding var selection: AppAppearance
+    let appLanguage: AppLanguage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -4786,10 +5037,10 @@ private struct AppearancePickerRow: View {
                     .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Appearance")
+                    Text(appLanguage.text("Appearance", "ธีมแอป"))
                         .foregroundStyle(.secondary)
 
-                    Text(selection.title)
+                    Text(selection.title(in: appLanguage))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.primary)
                 }
@@ -4797,9 +5048,9 @@ private struct AppearancePickerRow: View {
                 Spacer(minLength: 0)
             }
 
-            Picker("Appearance", selection: $selection) {
+            Picker(appLanguage.text("Appearance", "ธีมแอป"), selection: $selection) {
                 ForEach(AppAppearance.allCases) { appearance in
-                    Text(appearance.title)
+                    Text(appearance.title(in: appLanguage))
                         .tag(appearance)
                 }
             }
@@ -4846,11 +5097,12 @@ private struct LanguagePickerRow: View {
 }
 
 private struct ProfileLogoutButton: View {
+    let appLanguage: AppLanguage
     let action: () -> Void
 
     var body: some View {
         Button(role: .destructive, action: action) {
-            Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+            Label(appLanguage.text("Log Out", "ออกจากระบบ"), systemImage: "rectangle.portrait.and.arrow.right")
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.bordered)
@@ -4860,6 +5112,7 @@ private struct ProfileLogoutButton: View {
 }
 
 private struct ProfileEditorView: View {
+    let appLanguage: AppLanguage
     let onSave: (UserProfile) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -4885,7 +5138,8 @@ private struct ProfileEditorView: View {
         )
     }
 
-    init(profile: UserProfile, onSave: @escaping (UserProfile) -> Void) {
+    init(profile: UserProfile, appLanguage: AppLanguage, onSave: @escaping (UserProfile) -> Void) {
+        self.appLanguage = appLanguage
         self.onSave = onSave
         _fullName = State(initialValue: profile.fullName)
         _role = State(initialValue: profile.role)
@@ -4897,7 +5151,7 @@ private struct ProfileEditorView: View {
 
     var body: some View {
         Form {
-            Section("Profile Picture") {
+            Section(appLanguage.text("Profile Picture", "รูปโปรไฟล์")) {
                 HStack {
                     Spacer()
                     ProfilePhotoView(
@@ -4909,41 +5163,41 @@ private struct ProfileEditorView: View {
                 }
                 .padding(.vertical, 8)
 
-                AvatarStylePicker(selection: $avatarStyle)
+                AvatarStylePicker(selection: $avatarStyle, appLanguage: appLanguage)
             }
 
-            Section("Personal") {
-                TextField("Full Name", text: $fullName)
+            Section(appLanguage.text("Personal", "ข้อมูลส่วนตัว")) {
+                TextField(appLanguage.text("Full Name", "ชื่อ-นามสกุล"), text: $fullName)
                     .textInputAutocapitalization(.words)
 
-                TextField("Role", text: $role)
+                TextField(appLanguage.text("Role", "บทบาท"), text: $role)
                     .textInputAutocapitalization(.words)
             }
 
-            Section("Contact") {
-                TextField("Email", text: $email)
+            Section(appLanguage.text("Contact", "ติดต่อ")) {
+                TextField(appLanguage.text("Email", "อีเมล"), text: $email)
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
-                TextField("Phone", text: $phone)
+                TextField(appLanguage.text("Phone", "โทรศัพท์"), text: $phone)
                     .keyboardType(.phonePad)
 
-                TextField("Location", text: $location)
+                TextField(appLanguage.text("Location", "ที่อยู่"), text: $location)
                     .textInputAutocapitalization(.words)
             }
         }
-        .navigationTitle("Edit Profile")
+        .navigationTitle(appLanguage.editProfileTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
+                Button(appLanguage.cancelTitle) {
                     dismiss()
                 }
             }
 
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
+                Button(appLanguage.saveTitle) {
                     onSave(draftProfile)
                     dismiss()
                 }
@@ -4955,6 +5209,7 @@ private struct ProfileEditorView: View {
 
 private struct AvatarStylePicker: View {
     @Binding var selection: ProfileAvatarStyle
+    let appLanguage: AppLanguage
 
     private let columns = [
         GridItem(.flexible(), spacing: 10),
@@ -4969,7 +5224,8 @@ private struct AvatarStylePicker: View {
                 } label: {
                     AvatarStyleOptionCard(
                         style: style,
-                        isSelected: selection == style
+                        isSelected: selection == style,
+                        appLanguage: appLanguage
                     )
                 }
                 .buttonStyle(.plain)
@@ -4982,6 +5238,7 @@ private struct AvatarStylePicker: View {
 private struct AvatarStyleOptionCard: View {
     let style: ProfileAvatarStyle
     let isSelected: Bool
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 10) {
@@ -5001,7 +5258,7 @@ private struct AvatarStyleOptionCard: View {
             }
             .frame(width: 34, height: 34)
 
-            Text(style.title)
+            Text(style.title(in: appLanguage))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -5027,6 +5284,7 @@ private struct ProfileDetailRow: View {
     let icon: String
     let title: String
     let value: String
+    let appLanguage: AppLanguage
 
     var body: some View {
         HStack(spacing: 12) {
@@ -5039,7 +5297,7 @@ private struct ProfileDetailRow: View {
 
             Spacer(minLength: 12)
 
-            Text(value.isEmpty ? "Not set" : value)
+            Text(value.isEmpty ? appLanguage.text("Not set", "ยังไม่ได้ตั้งค่า") : value)
                 .fontWeight(.medium)
                 .foregroundStyle(value.isEmpty ? .secondary : .primary)
                 .multilineTextAlignment(.trailing)
@@ -5148,11 +5406,15 @@ private enum RecordEditorMode: Identifiable {
     }
 
     var title: String {
+        title(in: .english)
+    }
+
+    func title(in language: AppLanguage) -> String {
         switch self {
         case .create:
-            return "New Record"
+            return language.text("New Record", "บันทึกใหม่")
         case .edit:
-            return "Edit Record"
+            return language.text("Edit Record", "แก้ไขบันทึก")
         }
     }
 
@@ -5168,6 +5430,7 @@ private enum RecordEditorMode: Identifiable {
 
 private struct RecordEditorView: View {
     let mode: RecordEditorMode
+    let appLanguage: AppLanguage
     let onSave: (String, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -5178,8 +5441,9 @@ private struct RecordEditorView: View {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    init(mode: RecordEditorMode, onSave: @escaping (String, String) -> Void) {
+    init(mode: RecordEditorMode, appLanguage: AppLanguage, onSave: @escaping (String, String) -> Void) {
         self.mode = mode
+        self.appLanguage = appLanguage
         self.onSave = onSave
         _title = State(initialValue: mode.record?.title ?? "")
         _notes = State(initialValue: mode.record?.notes ?? "")
@@ -5188,25 +5452,25 @@ private struct RecordEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Details") {
-                    TextField("Title", text: $title)
+                Section(appLanguage.text("Details", "รายละเอียด")) {
+                    TextField(appLanguage.text("Title", "หัวข้อ"), text: $title)
                         .textInputAutocapitalization(.sentences)
 
-                    TextField("Notes", text: $notes, axis: .vertical)
+                    TextField(appLanguage.text("Notes", "บันทึก"), text: $notes, axis: .vertical)
                         .lineLimit(4...8)
                 }
             }
-            .navigationTitle(mode.title)
+            .navigationTitle(mode.title(in: appLanguage))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button(appLanguage.cancelTitle) {
                         dismiss()
                     }
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button(appLanguage.saveTitle) {
                         onSave(title, notes)
                         dismiss()
                     }
