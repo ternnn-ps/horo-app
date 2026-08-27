@@ -181,7 +181,35 @@ type ใหม่ทั้งหมดใช้ `Chata*` ให้ตรงก�
 (DuangLive เก็บ `remaining_coin` ใน Room แล้วให้ server ทับค่าได้ตลอดผ่าน
 `UPDATE user SET remaining_coin = ?` และแนบ `coin_alert` มากับ response ที่ไม่เกี่ยวกับเหรียญด้วยซ้ำ)
 
-### D9. Realtime สำหรับแชท — ต้องมี migration ใหม่
+### D9. Realtime สองโหมด — แชทใช้ postgres_changes, domain event ใช้ broadcast
+
+**(ปรับปรุงหลัง implement — เดิมเขียนไว้ว่าใช้ postgres_changes อย่างเดียว)**
+
+หลังไปอ่านว่า DuangLive ทำ socket ยังไง (`DuangLive-SocketIO-and-Call-Protocol.md`)
+พบว่าสิ่งที่เขาออกแบบถูกคือ **client subscribe "เรื่องที่เกิดขึ้น" ไม่ใช่ "แถวไหนเปลี่ยน"**
+— event ชื่อเป็นภาษาโดเมน (`se_start_call`) payload เป็นสิ่งที่ server กำหนด
+
+`postgres_changes` ส่งแถวในตารางออกไปตรง ๆ = **schema คือ wire protocol** ซึ่งชนกับกฎ
+"backend ต้องรองรับแอปเวอร์ชันเก่าตลอดไป" — เปลี่ยนความหมาย column วันนี้ แอปในมือคนอื่นพังทันที
+
+| ใช้กับ | กลไก | เหตุผล |
+|---|---|---|
+| ข้อความแชท | `postgres_changes` (`20260827000008`) | `question_message` เป็น append-only ที่ schema จะไม่ขยับ ความเสี่ยงต่ำสุด ต้นทุนเป็นศูนย์ |
+| สถานะคำถาม + (อนาคต) call signaling | **broadcast จาก trigger** (`20260827000009`) | server กำหนด payload เอง มี `v` สำหรับเวอร์ชัน บอกได้ว่า "เปลี่ยนจากอะไรเป็นอะไร" |
+
+**ไม่ทำเซิร์ฟเวอร์ Socket.IO เอง** — ต้องมีเครื่องรันตลอด + Redis สำหรับ presence + จัดการ
+scale เอง คือของที่เลือก Supabase มาเพื่อไม่ต้องทำ และจะได้มรดกบั๊กแบบเดียวกับที่เห็นใน
+โค้ด DuangLive (wire format ไม่ตรงกันสองฝั่ง, reconnect แล้วไม่ rejoin, `requestCall()`
+ตอนหลุด connection สั่ง `connect()` แล้ว return เฉย ๆ ไม่ยิงคำขอซ้ำ)
+
+**ข้อจำกัดที่ client ต้องรู้:**
+- `realtime.messages` เก็บข้อความแค่ **3 วัน** แล้วลบ — เป็นท่อส่ง ไม่ใช่ที่เก็บประวัติ
+  ประวัติจริงอยู่ใน `question` / `question_message` เสมอ เปิดแอปมาต้อง fetch ก่อน
+- private channel ที่ไม่มีสิทธิ์ **บางกรณี server เงียบไปเลยไม่ตอบอะไร** แยกไม่ออกจากเน็ตค้าง
+  ถ้าไม่ตั้ง timeout เอง (อีกเหตุผลที่ควรใช้ SDK ซึ่งจัดการ timeout/CHANNEL_ERROR ให้)
+- private channel ต้องยัด token ใหม่เข้า channel ทุกครั้งที่ refresh ไม่งั้น socket เงียบเมื่อ token หมดอายุ
+
+### D9.1 รายละเอียด migration แชท
 
 ยังไม่มี migration ไหน `alter publication supabase_realtime add table ...` เลย ต้องเพิ่มไฟล์ใหม่
 ให้ `question_message` และ `question` · Realtime เคารพ RLS ที่มีอยู่แล้ว (participant เท่านั้น)
