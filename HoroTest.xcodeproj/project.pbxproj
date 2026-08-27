@@ -18,6 +18,7 @@
 		1A0000010000000000000009 /* MockHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001D /* MockHoroDataService.swift */; };
 		1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001E /* SupabaseHoroDataService.swift */; };
 		1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001F /* HoroDataServiceTests.swift */; };
+		1A00000100000000000000A1 /* SupabaseConfig.plist in Resources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000A0 /* SupabaseConfig.plist */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +45,7 @@
 		1A000001000000000000001D /* MockHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHoroDataService.swift; sourceTree = "<group>"; };
 		1A000001000000000000001E /* SupabaseHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseHoroDataService.swift; sourceTree = "<group>"; };
 		1A000001000000000000001F /* HoroDataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataServiceTests.swift; sourceTree = "<group>"; };
+		1A00000100000000000000A0 /* SupabaseConfig.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = SupabaseConfig.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -83,6 +85,7 @@
 				1A0000010000000000000013 /* RecordListViewModel.swift */,
 				1A0000010000000000000018 /* UserProfileViewModel.swift */,
 				1A0000010000000000000014 /* Assets.xcassets */,
+				1A00000100000000000000A0 /* SupabaseConfig.plist */,
 			);
 			path = HoroTest;
 			sourceTree = "<group>";
@@ -205,6 +208,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A0000010000000000000004 /* Assets.xcassets in Resources */,
+				1A00000100000000000000A1 /* SupabaseConfig.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -268,6 +272,9 @@
 				INFOPLIST_KEY_HORO_SUPABASE_URL = "$(HORO_SUPABASE_URL)";
 				INFOPLIST_KEY_HORO_TEST_PASSWORD = "$(HORO_TEST_PASSWORD)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_SUPABASE_PUBLISHABLE_KEY = "$(SUPABASE_PUBLISHABLE_KEY)";
+				INFOPLIST_KEY_SUPABASE_TEST_PASSWORD = "$(SUPABASE_TEST_PASSWORD)";
+				INFOPLIST_KEY_SUPABASE_URL = "$(SUPABASE_URL)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -281,6 +288,8 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pacharapol.HoroTest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPABASE_PUBLISHABLE_KEY = sb_publishable_CVzfW6VyvpFasVt_PYwopQ_FZykQP4g;
+				SUPABASE_URL = "https://ycbuwrhnhdsbutbfzsvn.supabase.co";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -304,6 +313,9 @@
 				INFOPLIST_KEY_HORO_SUPABASE_URL = "$(HORO_SUPABASE_URL)";
 				INFOPLIST_KEY_HORO_TEST_PASSWORD = "$(HORO_TEST_PASSWORD)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_SUPABASE_PUBLISHABLE_KEY = "$(SUPABASE_PUBLISHABLE_KEY)";
+				INFOPLIST_KEY_SUPABASE_TEST_PASSWORD = "$(SUPABASE_TEST_PASSWORD)";
+				INFOPLIST_KEY_SUPABASE_URL = "$(SUPABASE_URL)";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -317,6 +329,8 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pacharapol.HoroTest;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPABASE_PUBLISHABLE_KEY = sb_publishable_CVzfW6VyvpFasVt_PYwopQ_FZykQP4g;
+				SUPABASE_URL = "https://ycbuwrhnhdsbutbfzsvn.supabase.co";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;

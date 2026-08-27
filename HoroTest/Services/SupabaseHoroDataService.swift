@@ -22,8 +22,8 @@ struct SupabaseConfiguration: Equatable {
     }
 
     static var runtime: SupabaseConfiguration? {
-        guard let urlString = runtimeValue("HORO_SUPABASE_URL"),
-              let anonKey = runtimeValue("HORO_SUPABASE_ANON_KEY")
+        guard let urlString = runtimeValue("SUPABASE_URL", "HORO_SUPABASE_URL"),
+              let anonKey = runtimeValue("SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY", "HORO_SUPABASE_ANON_KEY")
         else {
             return nil
         }
@@ -31,15 +31,32 @@ struct SupabaseConfiguration: Equatable {
         return SupabaseConfiguration(
             urlString: urlString,
             anonKey: anonKey,
-            testPassword: runtimeValue("HORO_TEST_PASSWORD") ?? "HoroTest123!"
+            testPassword: runtimeValue("SUPABASE_TEST_PASSWORD", "HORO_TEST_PASSWORD") ?? "HoroTest123!"
         )
     }
 
-    private static func runtimeValue(_ key: String) -> String? {
-        let bundleValue = Bundle.main.object(forInfoDictionaryKey: key) as? String
-        let environmentValue = ProcessInfo.processInfo.environment[key]
+    private static func runtimeValue(_ keys: String...) -> String? {
+        keys.lazy.compactMap(runtimeSingleValue).first
+    }
 
-        return [bundleValue, environmentValue]
+    private static let bundledConfig: [String: String] = {
+        guard let url = Bundle.main.url(forResource: "SupabaseConfig", withExtension: "plist"),
+              let data = try? Data(contentsOf: url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dictionary = plist as? [String: String]
+        else {
+            return [:]
+        }
+
+        return dictionary
+    }()
+
+    private static func runtimeSingleValue(_ key: String) -> String? {
+        let environmentValue = ProcessInfo.processInfo.environment[key]
+        let bundleValue = Bundle.main.object(forInfoDictionaryKey: key) as? String
+        let bundledConfigValue = bundledConfig[key]
+
+        return [environmentValue, bundleValue, bundledConfigValue]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { value in
                 !value.isEmpty && !value.contains("$(")

@@ -459,6 +459,32 @@ private struct AppBackground: View {
     }
 }
 
+private struct DataConnectionBanner: View {
+    let message: String
+    let isConnected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isConnected ? "checkmark.seal.fill" : "wifi.slash")
+                .font(.headline)
+                .foregroundStyle(isConnected ? .green : .orange)
+
+            Text(message)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(AppColors.softFill)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isConnected ? Color.green.opacity(0.30) : Color.orange.opacity(0.30))
+        }
+    }
+}
+
 private enum OperationRole: String, CaseIterable, Identifiable {
     case seer
     case customer
@@ -1600,9 +1626,9 @@ private enum ConversationPriority: Equatable {
 }
 
 private struct ChatConversation: Identifiable {
-    let id = UUID()
-    let seerName: String = "Aurora Veil"
-    let seerId: String = "S-8001"
+    let id: UUID
+    let seerName: String
+    let seerId: String
     let customerName: String
     let customerId: String
     let topic: String
@@ -1614,6 +1640,38 @@ private struct ChatConversation: Identifiable {
     let tint: Color
     var messages: [ChatMessage]
     let quickReplies: [String]
+
+    init(
+        id: UUID = UUID(),
+        seerName: String = "Aurora Veil",
+        seerId: String = "S-8001",
+        customerName: String,
+        customerId: String,
+        topic: String,
+        status: ConversationStatus,
+        priority: ConversationPriority,
+        accountTier: String,
+        waitTime: String,
+        unreadCount: Int,
+        tint: Color,
+        messages: [ChatMessage],
+        quickReplies: [String]
+    ) {
+        self.id = id
+        self.seerName = seerName
+        self.seerId = seerId
+        self.customerName = customerName
+        self.customerId = customerId
+        self.topic = topic
+        self.status = status
+        self.priority = priority
+        self.accountTier = accountTier
+        self.waitTime = waitTime
+        self.unreadCount = unreadCount
+        self.tint = tint
+        self.messages = messages
+        self.quickReplies = quickReplies
+    }
 
     var initials: String {
         let value = customerName
@@ -1794,6 +1852,48 @@ private final class TestChatViewModel: ObservableObject {
         conversations.first { $0.id == id }
     }
 
+    func replaceConversations(_ conversations: [ChatConversation]) {
+        self.conversations = conversations
+    }
+
+    @discardableResult
+    func startConversation(with seer: CustomerSeer, firstMessage: String) -> UUID {
+        let cleanText = firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let conversation = ChatConversation(
+            seerName: seer.name,
+            seerId: seer.accountID?.uuidString ?? seer.id.uuidString,
+            customerName: TestAccount.customer.displayName,
+            customerId: "C-TEST",
+            topic: seer.skills.first.map { "\($0) reading" } ?? "General reading",
+            status: .waiting,
+            priority: .normal,
+            accountTier: "Test",
+            waitTime: "Now",
+            unreadCount: 0,
+            tint: seer.tint,
+            messages: [
+                ChatMessage(
+                    sender: .system,
+                    text: "New reading chat started with \(seer.name).",
+                    timestamp: Date()
+                ),
+                ChatMessage(
+                    sender: .customer,
+                    text: cleanText.isEmpty ? "Hi \(seer.name), I would like to start a reading." : cleanText,
+                    timestamp: Date()
+                )
+            ],
+            quickReplies: [
+                "Thank you.",
+                "Can you explain more?",
+                "I want to book a call."
+            ]
+        )
+
+        conversations.insert(conversation, at: 0)
+        return conversation.id
+    }
+
     func sendMessage(conversationID: UUID, sender: ChatMessage.Sender, text: String) {
         let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -1820,6 +1920,316 @@ private final class TestChatViewModel: ObservableObject {
         case .system:
             break
         }
+    }
+}
+
+@MainActor
+private final class SupabaseAppViewModel: ObservableObject {
+    @Published private(set) var isConfigured: Bool
+    @Published private(set) var isConnected = false
+    @Published private(set) var statusMessage: String
+    @Published private(set) var walletAvailableCoin: Int?
+    @Published private(set) var seers: [CustomerSeer] = []
+    @Published private(set) var coinPackages: [WalletTopUpOption] = []
+
+    private let service: SupabaseHoroDataService?
+    private var signedInAccountID: UUID?
+    private var signedInRole: OperationRole?
+
+    init(configuration: SupabaseConfiguration? = .runtime) {
+        if let configuration {
+            service = SupabaseHoroDataService(configuration: configuration)
+            isConfigured = true
+            statusMessage = "Supabase settings loaded. Login will test the live database."
+        } else {
+            service = nil
+            isConfigured = false
+            statusMessage = "Local mock mode. Add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to connect Supabase."
+        }
+    }
+
+    func signIn(testAccount: TestAccount, password: String, chatStore: TestChatViewModel) async -> Int? {
+        guard let service else {
+            isConnected = false
+            statusMessage = "Local mock mode. Supabase URL or publishable key is missing."
+            return nil
+        }
+
+        let cleanPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedPassword = cleanPassword.isEmpty ? service.configuration.testPassword : cleanPassword
+
+        do {
+            let session = try await service.signIn(email: testAccount.email, password: resolvedPassword)
+            let account = try await service.fetchAccount()
+
+            signedInAccountID = session.userID
+            signedInRole = testAccount.role
+            isConnected = true
+            statusMessage = "Supabase connected as \(account.role.rawValue)."
+
+            await refreshWallet()
+            await refreshSeers()
+            await refreshCoinPackages()
+            await refreshConversations(chatStore: chatStore)
+
+            return walletAvailableCoin
+        } catch {
+            isConnected = false
+            statusMessage = "Supabase login failed: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    func startQuestion(with seer: CustomerSeer, firstMessage: String, chatStore: TestChatViewModel) async -> Bool {
+        guard let service, isConnected else {
+            statusMessage = "Supabase is not connected. Created a local test chat instead."
+            return false
+        }
+
+        guard let serviceID = seer.serviceID else {
+            statusMessage = "\(seer.name) has no enabled Supabase service yet."
+            return false
+        }
+
+        do {
+            _ = try await service.submitQuestion(
+                SupabaseQuestionDraft(
+                    seerServiceID: serviceID,
+                    firstMessage: firstMessage
+                )
+            )
+            statusMessage = "Question submitted to Supabase."
+            await refreshWallet()
+            await refreshConversations(chatStore: chatStore)
+            return true
+        } catch {
+            statusMessage = "Could not submit question: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func sendMessage(
+        conversationID: UUID,
+        sender: ChatMessage.Sender,
+        text: String,
+        chatStore: TestChatViewModel
+    ) async -> Bool {
+        guard sender != .system else {
+            return false
+        }
+
+        guard let service, isConnected, let signedInAccountID else {
+            return false
+        }
+
+        do {
+            _ = try await service.sendQuestionMessage(
+                questionID: conversationID,
+                senderID: signedInAccountID,
+                body: text
+            )
+            statusMessage = "Message synced to Supabase."
+            await refreshConversations(chatStore: chatStore)
+            return true
+        } catch {
+            statusMessage = "Message saved locally. Supabase insert failed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func refreshWallet() async {
+        guard let service else {
+            return
+        }
+
+        do {
+            let wallet = try await service.fetchWallet()
+            walletAvailableCoin = wallet.availableCoin
+        } catch {
+            walletAvailableCoin = nil
+        }
+    }
+
+    private func refreshSeers() async {
+        guard let service else {
+            return
+        }
+
+        do {
+            let listings = try await service.fetchSeerListings(matching: nil)
+            seers = mapSeers(listings)
+        } catch {
+            if seers.isEmpty {
+                seers = []
+            }
+        }
+    }
+
+    private func refreshCoinPackages() async {
+        guard let service else {
+            return
+        }
+
+        do {
+            let packages = try await service.fetchCoinPackages()
+            coinPackages = packages.map { package in
+                WalletTopUpOption(
+                    id: package.code,
+                    coins: package.coinAmount + package.bonusCoin,
+                    priceLabel: "\(package.currency) \(package.priceMinor / 100)",
+                    subtitle: package.allowedMethods.isEmpty
+                        ? "Supabase coin package"
+                        : "Accepts \(package.allowedMethods.joined(separator: ", "))"
+                )
+            }
+        } catch {
+            coinPackages = []
+        }
+    }
+
+    private func refreshConversations(chatStore: TestChatViewModel) async {
+        guard let service else {
+            return
+        }
+
+        do {
+            let questions = try await service.fetchQuestions()
+            let conversations = await mapConversations(questions, service: service)
+            chatStore.replaceConversations(conversations)
+        } catch {
+            statusMessage = "Supabase chat refresh failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func mapSeers(_ listings: [SupabaseSeerListing]) -> [CustomerSeer] {
+        let tintPalette: [Color] = [.purple, .teal, .orange, .indigo, .pink, .blue]
+
+        return listings.enumerated().map { index, listing in
+            let skills = listing.skills.isEmpty ? ["General Reading"] : listing.skills
+            let priceCoin = listing.priceCoin ?? 0
+            let bio = listing.bio.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rating = listing.ratingAverage.map { String(format: "%.1f", $0) } ?? "New"
+
+            return CustomerSeer(
+                id: listing.id,
+                accountID: listing.id,
+                serviceID: listing.serviceID,
+                avatarURL: listing.avatarURL.flatMap { URL(string: $0) },
+                name: listing.displayName,
+                title: skills.first ?? "Horo Seer",
+                specialty: bio.isEmpty ? "Live Supabase seer profile." : bio,
+                rating: rating,
+                reviewCount: listing.ratingCount,
+                rate: priceCoin > 0 ? "\(priceCoin) coins" : "Ask",
+                nextAvailable: listing.acceptsQuestion ? "Now" : "Unavailable",
+                skills: skills,
+                styles: listing.serviceID == nil
+                    ? ["Profile connected", "Service setup required"]
+                    : ["Live Supabase profile", "Question chat enabled"],
+                bio: bio.isEmpty ? "This seer profile is loaded from Supabase." : bio,
+                tint: tintPalette[index % tintPalette.count]
+            )
+        }
+    }
+
+    private func mapConversations(
+        _ questions: [SupabaseQuestion],
+        service: SupabaseHoroDataService
+    ) async -> [ChatConversation] {
+        var conversations: [ChatConversation] = []
+
+        for question in questions {
+            let rows = (try? await service.fetchMessages(questionID: question.id)) ?? []
+            conversations.append(mapConversation(question, messages: rows))
+        }
+
+        return conversations
+    }
+
+    private func mapConversation(
+        _ question: SupabaseQuestion,
+        messages: [SupabaseQuestionMessage]
+    ) -> ChatConversation {
+        let seer = seers.first { $0.accountID == question.seerID }
+        let seerName = seer?.name ?? fallbackSeerName(for: question)
+        let mappedMessages = messages.map { message in
+            ChatMessage(
+                sender: sender(for: message, question: question),
+                text: message.content ?? "",
+                timestamp: date(from: message.createdAt)
+            )
+        }
+
+        let resolvedMessages = mappedMessages.isEmpty
+            ? [
+                ChatMessage(
+                    sender: .system,
+                    text: "Question created in Supabase.",
+                    timestamp: date(from: question.createdAt)
+                )
+            ]
+            : mappedMessages
+
+        return ChatConversation(
+            id: question.id,
+            seerName: seerName,
+            seerId: shortID(question.seerID),
+            customerName: signedInRole == .customer ? TestAccount.customer.displayName : "Customer \(shortID(question.userID))",
+            customerId: shortID(question.userID),
+            topic: "\(question.priceCoin) coin question",
+            status: status(from: question.status),
+            priority: .normal,
+            accountTier: "Supabase",
+            waitTime: question.status.capitalized,
+            unreadCount: 0,
+            tint: seer?.tint ?? .teal,
+            messages: resolvedMessages,
+            quickReplies: signedInRole == .seer
+                ? ["I am reading that now.", "Please share one more detail.", "I will guide you step by step."]
+                : ["Thank you.", "Can you explain more?", "I want to book a call."]
+        )
+    }
+
+    private func fallbackSeerName(for question: SupabaseQuestion) -> String {
+        if signedInRole == .seer, question.seerID == signedInAccountID {
+            return TestAccount.seer.displayName
+        }
+
+        return "Seer \(shortID(question.seerID))"
+    }
+
+    private func sender(for message: SupabaseQuestionMessage, question: SupabaseQuestion) -> ChatMessage.Sender {
+        guard let senderID = message.senderID else {
+            return .system
+        }
+
+        return senderID == question.seerID ? .seer : .customer
+    }
+
+    private func status(from value: String) -> ConversationStatus {
+        switch value.lowercased() {
+        case "pending", "submitted", "waiting":
+            return .waiting
+        case "completed", "closed", "resolved", "cancelled", "expired":
+            return .followUp
+        default:
+            return .active
+        }
+    }
+
+    private func shortID(_ id: UUID) -> String {
+        String(id.uuidString.prefix(8)).uppercased()
+    }
+
+    private func date(from value: String) -> Date {
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        if let date = fractionalFormatter.date(from: value) {
+            return date
+        }
+
+        return ISO8601DateFormatter().date(from: value) ?? Date()
     }
 }
 
@@ -2230,6 +2640,7 @@ private struct CustomerHomeMenuPicker: View {
 
 private struct CustomerFeaturedSeersPreview: View {
     @ObservedObject var supabaseApp: SupabaseAppViewModel
+    @ObservedObject var chatStore: TestChatViewModel
     @Binding var coinBalance: Int
 
     let seers: [CustomerSeer]
@@ -2248,6 +2659,7 @@ private struct CustomerFeaturedSeersPreview: View {
                         CustomerSeerProfileView(
                             seer: seer,
                             supabaseApp: supabaseApp,
+                            chatStore: chatStore,
                             coinBalance: $coinBalance,
                             onOpenChat: onOpenChat
                         )
@@ -2264,6 +2676,7 @@ private struct CustomerFeaturedSeersPreview: View {
 private struct CustomerSeerDiscoveryView: View {
     @Binding var searchText: String
     @ObservedObject var supabaseApp: SupabaseAppViewModel
+    @ObservedObject var chatStore: TestChatViewModel
     @Binding var coinBalance: Int
 
     let seers: [CustomerSeer]
@@ -2311,6 +2724,7 @@ private struct CustomerSeerDiscoveryView: View {
                             CustomerSeerProfileView(
                                 seer: seer,
                                 supabaseApp: supabaseApp,
+                                chatStore: chatStore,
                                 coinBalance: $coinBalance,
                                 onOpenChat: onOpenChat
                             )
@@ -2445,12 +2859,41 @@ private struct CustomerSeerPhotoView: View {
 
     var body: some View {
         ZStack {
+            if let avatarURL = seer.avatarURL {
+                AsyncImage(url: avatarURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    case .failure, .empty:
+                        seerPlaceholder
+                    @unknown default:
+                        seerPlaceholder
+                    }
+                }
+            } else {
+                seerPlaceholder
+            }
+        }
+        .frame(width: width, height: height)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.28), lineWidth: 1)
+        }
+        .accessibilityLabel("\(seer.name) Profile Picture")
+    }
+
+    private var seerPlaceholder: some View {
+        ZStack {
             LinearGradient(
                 colors: seer.pictureColors,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
-
+            
             Image(systemName: "sparkles")
                 .font(.system(size: height * 0.34, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.22))
@@ -2461,14 +2904,6 @@ private struct CustomerSeerPhotoView: View {
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
         }
-        .frame(width: width, height: height)
-        .frame(maxWidth: width == nil ? .infinity : nil)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(.white.opacity(0.28), lineWidth: 1)
-        }
-        .accessibilityLabel("\(seer.name) Profile Picture")
     }
 }
 
@@ -2506,6 +2941,7 @@ private struct SeerTag: View {
 private struct CustomerSeerProfileView: View {
     let seer: CustomerSeer
     @ObservedObject var supabaseApp: SupabaseAppViewModel
+    @ObservedObject var chatStore: TestChatViewModel
     @Binding var coinBalance: Int
 
     let onOpenChat: () -> Void
@@ -2611,11 +3047,18 @@ private struct CustomerSeerProfileView: View {
 
     private func messageSeer() {
         Task {
-            await supabaseApp.startQuestion(
+            let didStartLiveQuestion = await supabaseApp.startQuestion(
                 with: seer,
                 firstMessage: "Hi \(seer.name), I would like to start a reading.",
-                chatStore: TestChatViewModelProxy.shared(chatStoreNotAvailableMessage: "")
+                chatStore: chatStore
             )
+
+            if !didStartLiveQuestion {
+                chatStore.startConversation(
+                    with: seer,
+                    firstMessage: "Hi \(seer.name), I would like to start a reading."
+                )
+            }
         }
 
         onOpenChat()
@@ -2831,6 +3274,7 @@ private struct SeerStyleRow: View {
 
 private struct CustomerChatSpaceView: View {
     @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
     let appLanguage: AppLanguage
 
     private var conversations: [ChatConversation] {
@@ -2859,7 +3303,8 @@ private struct CustomerChatSpaceView: View {
                             NavigationLink {
                                 CustomerChatDetailView(
                                     conversationID: conversation.id,
-                                    chatStore: chatStore
+                                    chatStore: chatStore,
+                                    supabaseApp: supabaseApp
                                 )
                             } label: {
                                 CustomerConversationRow(conversation: conversation)
@@ -2932,6 +3377,7 @@ private struct CustomerConversationRow: View {
 private struct CustomerChatDetailView: View {
     let conversationID: UUID
     @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
 
     @State private var draft = ""
 
@@ -2984,13 +3430,24 @@ private struct CustomerChatDetailView: View {
             return
         }
 
-        chatStore.sendMessage(
-            conversationID: conversationID,
-            sender: .customer,
-            text: cleanDraft
-        )
-
         draft = ""
+
+        Task {
+            let didSendToSupabase = await supabaseApp.sendMessage(
+                conversationID: conversationID,
+                sender: .customer,
+                text: cleanDraft,
+                chatStore: chatStore
+            )
+
+            if !didSendToSupabase {
+                chatStore.sendMessage(
+                    conversationID: conversationID,
+                    sender: .customer,
+                    text: cleanDraft
+                )
+            }
+        }
     }
 
     private func scrollToLatestMessage(with proxy: ScrollViewProxy) {
@@ -3507,7 +3964,10 @@ private struct CustomerMockProfile {
 }
 
 private struct CustomerSeer: Identifiable {
-    let id = UUID()
+    let id: UUID
+    let accountID: UUID?
+    let serviceID: UUID?
+    let avatarURL: URL?
     let name: String
     let title: String
     let specialty: String
@@ -3519,6 +3979,40 @@ private struct CustomerSeer: Identifiable {
     let styles: [String]
     let bio: String
     let tint: Color
+
+    init(
+        id: UUID = UUID(),
+        accountID: UUID? = nil,
+        serviceID: UUID? = nil,
+        avatarURL: URL? = nil,
+        name: String,
+        title: String,
+        specialty: String,
+        rating: String,
+        reviewCount: Int,
+        rate: String,
+        nextAvailable: String,
+        skills: [String],
+        styles: [String],
+        bio: String,
+        tint: Color
+    ) {
+        self.id = id
+        self.accountID = accountID
+        self.serviceID = serviceID
+        self.avatarURL = avatarURL
+        self.name = name
+        self.title = title
+        self.specialty = specialty
+        self.rating = rating
+        self.reviewCount = reviewCount
+        self.rate = rate
+        self.nextAvailable = nextAvailable
+        self.skills = skills
+        self.styles = styles
+        self.bio = bio
+        self.tint = tint
+    }
 
     var initials: String {
         let value = name

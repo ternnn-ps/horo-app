@@ -31,6 +31,22 @@ The app bundle identifier is `com.pacharapol.HoroTest`.
 
 If Xcode says the bundle identifier is already used, change it to something unique like `com.yourname.HoroTest`.
 
+## Supabase Connection
+
+The app can read Supabase settings from Xcode build settings, generated Info.plist values, or Xcode scheme environment variables:
+
+```sh
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_TEST_PASSWORD=HoroTest123!
+```
+
+The older aliases `HORO_SUPABASE_URL`, `HORO_SUPABASE_ANON_KEY`, and `HORO_TEST_PASSWORD` still work too.
+
+Do not put `SUPABASE_SECRET_KEY` in the iOS app. Keep it only in Supabase Edge Functions or another trusted backend. `SUPABASE_JWKS_URL` is also backend-facing for token verification and is not needed by the current iOS client.
+
+For the current test login, create Supabase Auth users for `customer@horo.test` and `seer@horo.test` with the same test password. Typing `customer` or `seer` in the app logs into those emails; if the password box is empty, the app uses `SUPABASE_TEST_PASSWORD` or `HoroTest123!`.
+
 ## Current Features
 
 - Light Mode and Dark Mode-friendly SwiftUI colors.
@@ -57,7 +73,8 @@ If Xcode says the bundle identifier is already used, change it to something uniq
 - Mark records done or active from the record action menu.
 - Persist records locally with `UserDefaults`.
 - Supabase-ready domain models and data service protocol for users, seer profiles, customer profiles, reading requests, chat threads, messages, and reviews.
+- URLSession-based `SupabaseHoroDataService` for test login/auth, `v_my_wallet`, `seer_profile`/`seer_service`, `submit_question`, and `question_message`.
 - In-memory `MockHoroDataService` with unit coverage for role login, seer search, reading request CRUD, and chat messages.
 - DB-to-app function analysis in `docs/specs/horo-app-function-map.md`.
 
-The CRUD storage is intentionally isolated behind `RecordStoring`, so a Supabase-backed implementation can replace `UserDefaultsRecordStore` later. The broader app data layer is isolated behind `HoroDataServicing`, with a mock service available now and a `SupabaseHoroDataService` scaffold ready for the Supabase Swift SDK.
+The CRUD storage is intentionally isolated behind `RecordStoring`, so a Supabase-backed implementation can replace `UserDefaultsRecordStore` later. The broader app data layer is isolated behind `HoroDataServicing`, with both mock and Supabase implementations available.
