@@ -1280,6 +1280,116 @@ private struct HoroCoinIcon: View {
     }
 }
 
+
+/// แถบจัดการงานเหนือช่องพิมพ์ — จุดเดียวในแอปที่เงินออกจาก escrow
+///
+/// ปุ่มขึ้นตามสถานะที่ server บอก ไม่ใช่สถานะที่แอปเดาเอง และหลังกดทุกครั้งจะอ่านกระเป๋าใหม่
+private struct QuestionLifecycleBar: View {
+    let questionID: UUID
+    @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
+
+    @State private var isWorking = false
+
+    var body: some View {
+        if let status = supabaseApp.status(ofQuestion: questionID) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(headline(for: status))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 10) {
+                    ForEach(actions(for: status), id: \.title) { action in
+                        Button {
+                            Task { await run(action.run) }
+                        } label: {
+                            Text(action.title)
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(action.tint)
+                        .disabled(isWorking)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private struct LifecycleAction {
+        let title: String
+        let tint: Color
+        let run: () async -> Bool
+    }
+
+    private var isSeer: Bool { supabaseApp.signedInRole == .seer }
+
+    private func headline(for status: String) -> String {
+        switch status {
+        case "submitted":
+            return isSeer
+                ? appLanguage.text("Waiting for your first answer", "รอคุณตอบครั้งแรก")
+                : appLanguage.text("Coins are held until the seer answers", "เหรียญถูกกันไว้จนกว่าหมอดูจะตอบ")
+        case "active":
+            return isSeer
+                ? appLanguage.text("Close the job to receive your share", "ปิดงานเพื่อรับส่วนแบ่ง")
+                : appLanguage.text("Reading in progress", "กำลังปรึกษาอยู่")
+        case "close_requested":
+            return isSeer
+                ? appLanguage.text("Waiting for the customer to confirm", "รอผู้ถามยืนยันปิดงาน")
+                : appLanguage.text("The seer asked to close this job", "หมอดูขอปิดงานนี้")
+        case "completed":
+            return appLanguage.text("Closed. Coins have been settled.", "ปิดงานแล้ว เหรียญถูกจ่ายเรียบร้อย")
+        case "cancelled_refunded":
+            return appLanguage.text("Cancelled. Coins were refunded.", "ยกเลิกแล้ว เหรียญถูกคืนเรียบร้อย")
+        default:
+            return status
+        }
+    }
+
+    private func actions(for status: String) -> [LifecycleAction] {
+        switch (status, isSeer) {
+        case ("submitted", false):
+            return [LifecycleAction(
+                title: appLanguage.text("Cancel and refund", "ยกเลิกและรับเหรียญคืน"),
+                tint: .red,
+                run: { await supabaseApp.cancelQuestion(questionID: questionID, chatStore: chatStore) }
+            )]
+        case ("active", true):
+            return [LifecycleAction(
+                title: appLanguage.text("Ask to close", "ขอปิดงาน"),
+                tint: .accentColor,
+                run: { await supabaseApp.requestClose(questionID: questionID, chatStore: chatStore) }
+            )]
+        case ("close_requested", false):
+            return [
+                LifecycleAction(
+                    title: appLanguage.text("Confirm and pay", "ยืนยันปิดงาน"),
+                    tint: .green,
+                    run: { await supabaseApp.respondClose(questionID: questionID, accept: true, chatStore: chatStore) }
+                ),
+                LifecycleAction(
+                    title: appLanguage.text("Not yet", "ยังไม่ปิด"),
+                    tint: .gray,
+                    run: { await supabaseApp.respondClose(questionID: questionID, accept: false, chatStore: chatStore) }
+                )
+            ]
+        default:
+            return []
+        }
+    }
+
+    private func run(_ operation: @escaping () async -> Bool) async {
+        isWorking = true
+        _ = await operation()
+        isWorking = false
+    }
+}
+
 private struct MockChatDetailView: View {
     let conversationID: UUID
     @ObservedObject var chatStore: TestChatViewModel
@@ -1321,6 +1431,13 @@ private struct MockChatDetailView: View {
                     scrollToLatestMessage(with: proxy)
                 }
             }
+
+            QuestionLifecycleBar(
+                questionID: conversationID,
+                chatStore: chatStore,
+                supabaseApp: supabaseApp,
+                appLanguage: appLanguage
+            )
 
             ChatComposer(
                 draft: $draft,
@@ -2044,12 +2161,16 @@ private final class SupabaseAppViewModel: ObservableObject {
     @Published private(set) var isConnected = false
     @Published private(set) var statusMessage: String
     @Published private(set) var walletAvailableCoin: Int?
+    @Published private(set) var walletReservedCoin: Int?
+    @Published private(set) var walletPayableCoin: Int?
     @Published private(set) var seers: [CustomerSeer] = []
     @Published private(set) var coinPackages: [WalletTopUpOption] = []
+    /// สถานะล่าสุดของคำถามแต่ละใบ (submitted / active / close_requested / completed / cancelled_refunded)
+    @Published private(set) var questionStatuses: [UUID: String] = [:]
 
     private let service: SupabaseHoroDataService?
     private var signedInAccountID: UUID?
-    private var signedInRole: OperationRole?
+    @Published private(set) var signedInRole: OperationRole?
 
     init(configuration: SupabaseConfiguration? = .runtime) {
         if let configuration {
@@ -2169,8 +2290,12 @@ private final class SupabaseAppViewModel: ObservableObject {
         do {
             let wallet = try await service.fetchWallet()
             walletAvailableCoin = wallet.availableCoin
+            walletReservedCoin = wallet.reservedCoin
+            walletPayableCoin = wallet.payableCoin
         } catch {
             walletAvailableCoin = nil
+            walletReservedCoin = nil
+            walletPayableCoin = nil
         }
     }
 
@@ -2211,6 +2336,56 @@ private final class SupabaseAppViewModel: ObservableObject {
         }
     }
 
+
+    /// สถานะของคำถามใบนี้เท่าที่ server บอกล่าสุด
+    func status(ofQuestion id: UUID) -> String? {
+        questionStatuses[id]
+    }
+
+    /// หมอดูขอปิดงาน
+    func requestClose(questionID: UUID, chatStore: TestChatViewModel) async -> Bool {
+        await runLifecycle(chatStore: chatStore) { service in
+            try await service.requestCloseQuestion(id: questionID)
+        }
+    }
+
+    /// ผู้ใช้ตอบคำขอปิดงาน — accept = true คือจุดที่เหรียญเข้ากระเป๋าหมอดูจริง
+    func respondClose(questionID: UUID, accept: Bool, chatStore: TestChatViewModel) async -> Bool {
+        await runLifecycle(chatStore: chatStore) { service in
+            try await service.respondCloseQuestion(id: questionID, accept: accept)
+        }
+    }
+
+    /// ผู้ใช้ยกเลิกคำถามที่หมอดูยังไม่ตอบ — ได้เหรียญคืนเต็ม
+    func cancelQuestion(questionID: UUID, chatStore: TestChatViewModel) async -> Bool {
+        await runLifecycle(chatStore: chatStore) { service in
+            try await service.cancelQuestion(id: questionID)
+        }
+    }
+
+    private func runLifecycle(
+        chatStore: TestChatViewModel,
+        _ operation: (SupabaseHoroDataService) async throws -> SupabaseQuestionLifecycle
+    ) async -> Bool {
+        guard let service, isConnected else {
+            statusMessage = "Supabase is not connected."
+            return false
+        }
+
+        do {
+            let result = try await operation(service)
+            statusMessage = result.replayed == true
+                ? "ทำรายการนี้ไปแล้ว สถานะตอนนี้คือ \(result.status)"
+                : "อัปเดตงานเป็น \(result.status) แล้ว"
+            await refreshWallet()
+            await refreshConversations(chatStore: chatStore)
+            return true
+        } catch {
+            statusMessage = "ทำรายการไม่สำเร็จ: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func refreshConversations(chatStore: TestChatViewModel) async {
         guard let service else {
             return
@@ -2218,6 +2393,7 @@ private final class SupabaseAppViewModel: ObservableObject {
 
         do {
             let questions = try await service.fetchQuestions()
+            questionStatuses = Dictionary(uniqueKeysWithValues: questions.map { ($0.id, $0.status) })
             let conversations = await mapConversations(questions, service: service)
             chatStore.replaceConversations(conversations)
         } catch {
@@ -3566,6 +3742,13 @@ private struct CustomerChatDetailView: View {
                     scrollToLatestMessage(with: proxy)
                 }
             }
+
+            QuestionLifecycleBar(
+                questionID: conversationID,
+                chatStore: chatStore,
+                supabaseApp: supabaseApp,
+                appLanguage: appLanguage
+            )
 
             ChatComposer(
                 draft: $draft,

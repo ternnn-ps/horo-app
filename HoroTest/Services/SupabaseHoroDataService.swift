@@ -229,6 +229,20 @@ struct SupabaseQuestionDraft: Equatable {
     }
 }
 
+/// ผลลัพธ์ของ RPC ที่เปลี่ยนสถานะคำถาม — cancel / request_close / respond_close คืนรูปเดียวกัน
+/// `replayed` มาเมื่อเรียกซ้ำบนสถานะที่ทำไปแล้ว (ไม่ถือว่าผิดพลาด และไม่แตะเงินรอบสอง)
+struct SupabaseQuestionLifecycle: Decodable, Equatable {
+    let questionID: UUID
+    let status: String
+    let replayed: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case questionID = "question_id"
+        case status
+        case replayed
+    }
+}
+
 /// กติกาเดียวของการเลือก idempotency key ตอนซื้อคำถาม — แยกออกมาเพื่อให้เทสได้
 ///
 /// บั๊กที่กันอยู่: ผู้ใช้กดส่ง เน็ตหลุด กดใหม่ ถ้าได้ key ใหม่ = ซื้อสองครั้ง หักเหรียญสองรอบ
@@ -456,6 +470,37 @@ final class SupabaseHoroDataService: HoroDataServicing {
         }
 
         return message
+    }
+
+
+    /// หมอดูกดขอปิดงาน — ยังไม่มีเงินย้ายจนกว่าผู้ใช้จะยืนยัน
+    @discardableResult
+    func requestCloseQuestion(id: UUID) async throws -> SupabaseQuestionLifecycle {
+        try await request(
+            path: "rest/v1/rpc/request_close_question",
+            method: "POST",
+            body: ["p_question_id": id.uuidString]
+        )
+    }
+
+    /// ผู้ใช้ตอบคำขอปิดงาน — accept = true คือจุดที่เหรียญออกจาก escrow เข้าหมอดูจริง
+    @discardableResult
+    func respondCloseQuestion(id: UUID, accept: Bool) async throws -> SupabaseQuestionLifecycle {
+        try await request(
+            path: "rest/v1/rpc/respond_close_question",
+            method: "POST",
+            body: RespondCloseBody(questionID: id.uuidString, accept: accept)
+        )
+    }
+
+    /// ผู้ใช้ยกเลิกคำถามที่หมอดูยังไม่ตอบ — คืนเหรียญเต็มจำนวน
+    @discardableResult
+    func cancelQuestion(id: UUID) async throws -> SupabaseQuestionLifecycle {
+        try await request(
+            path: "rest/v1/rpc/cancel_question",
+            method: "POST",
+            body: ["p_question_id": id.uuidString]
+        )
     }
 
     func signInMock(as role: HoroUserRole) async throws -> HoroUser {
@@ -735,5 +780,15 @@ private struct SupabaseUserProfileRow: Decodable, Equatable {
         case birthdate
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+}
+
+private struct RespondCloseBody: Encodable {
+    let questionID: String
+    let accept: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case questionID = "p_question_id"
+        case accept = "p_accept"
     }
 }

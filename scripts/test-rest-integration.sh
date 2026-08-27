@@ -81,7 +81,12 @@ fi
 echo
 echo "── 2. เห็นหมอดูที่เปิดรับงาน แล้วซื้อคำถามได้ (เหรียญเข้า escrow)"
 
-SERVICE=$(api "$USER_TOKEN" GET "seer_service?is_enabled=eq.true&select=id,seer_id,price_coin&limit=1")
+# เจาะจง service ของหมอดูใน fixture เสมอ — ถ้าเลือกแบบ limit=1 เฉย ๆ จะไปได้หมอดูเก่าที่ค้าง
+# ในฐานจากการรันครั้งก่อน แล้วเทสจะล้มแบบงง ๆ ตอนหมอดูของเราเข้าไปตอบไม่ได้
+SEER_TOKEN=$(login "$FIXTURE_SEER_EMAIL" "$FIXTURE_SEER_PASSWORD")
+SEER_ACCOUNT_ID=$(curl -s "$SUPABASE_URL/auth/v1/user" -H "apikey: $ANON_KEY" \
+  -H "Authorization: Bearer $SEER_TOKEN" | jq -r '.id // empty')
+SERVICE=$(api "$USER_TOKEN" GET "seer_service?seer_id=eq.$SEER_ACCOUNT_ID&is_enabled=eq.true&select=id,seer_id,price_coin&limit=1")
 SERVICE_ID=$(echo "$SERVICE" | jq -r '.[0].id // empty')
 PRICE=$(echo "$SERVICE" | jq -r '.[0].price_coin // empty')
 
@@ -182,10 +187,6 @@ fi
 
 echo
 echo "── 5. ครบวงจรเงิน: หมอดูตอบ → ขอปิดงาน → ผู้ใช้ยืนยัน → เงินถึงหมอดู"
-
-SEER_TOKEN=$(login "$FIXTURE_SEER_EMAIL" "$FIXTURE_SEER_PASSWORD")
-SEER_ACCOUNT_ID=$(curl -s "$SUPABASE_URL/auth/v1/user" -H "apikey: $ANON_KEY" \
-  -H "Authorization: Bearer $SEER_TOKEN" | jq -r '.id')
 
 if [[ -z "$SEER_TOKEN" || -z "${QUESTION_ID:-}" ]]; then
   bad "เตรียมบัญชีหมอดูได้" "ไม่มี token หรือไม่มีคำถามให้ทดสอบ"
