@@ -34,13 +34,21 @@ If Xcode says the bundle identifier is already used, change it to something uniq
 ## Current Features
 
 - Light Mode and Dark Mode-friendly SwiftUI colors.
+- App-wide appearance setting in profile menus for System, Light, and Dark mode.
+- App-wide language setting in profile menus for English and Thai.
 - Mock login page. Type `seer` or `customer`; the password field can be empty.
+- Passwordless test accounts for customer and seer chat testing.
 - Seer bottom tab navigation for Chat, Dashboard, and Profile.
 - Customer bottom tab navigation for Home, Chat, and Profile.
 - Mock seer and customer roles.
 - Seer dashboard with role overview, queue metrics, priority queue preview, and record metrics.
 - Seer profile page with a profile picture mockup, contact detail, activity, edit flow, and logout.
-- Customer space with active reading, quick actions, searchable seer discovery cards, seer profile details, mock seer chat, customer profile, and logout.
+- Customer space with active reading, quick actions, two-column seer discovery cards, seer profile details, mock seer chat, customer profile, and logout.
+- Customer coin wallet mockup where THB top-ups add in-app coins, with payment methods including QR payment.
+- Seer detail booking mockup with message, book, and coin-based call options for 15 minutes, 30 minutes, or 1 hour.
+- Simple generated app icon in the asset catalog.
+- Edit Profile includes mock profile picture style selection.
+- Shared in-memory test chat store so the customer and seer accounts can exchange messages during API planning.
 - Improved mock chat with a customer queue, search, status/priority chips, reading context, quick replies, and seer/customer bubbles.
 - Create records with a title and notes.
 - Read records in a native SwiftUI list.
@@ -50,5 +58,6 @@ If Xcode says the bundle identifier is already used, change it to something uniq
 - Persist records locally with `UserDefaults`.
 - Supabase-ready domain models and data service protocol for users, seer profiles, customer profiles, reading requests, chat threads, messages, and reviews.
 - In-memory `MockHoroDataService` with unit coverage for role login, seer search, reading request CRUD, and chat messages.
+- DB-to-app function analysis in `docs/specs/horo-app-function-map.md`.
 
 The CRUD storage is intentionally isolated behind `RecordStoring`, so a Supabase-backed implementation can replace `UserDefaultsRecordStore` later. The broader app data layer is isolated behind `HoroDataServicing`, with a mock service available now and a `SupabaseHoroDataService` scaffold ready for the Supabase Swift SDK.

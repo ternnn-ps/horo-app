@@ -3,39 +3,90 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var recordViewModel = RecordListViewModel()
     @StateObject private var profileViewModel = UserProfileViewModel()
+    @StateObject private var chatStore = TestChatViewModel()
+    @StateObject private var supabaseApp = SupabaseAppViewModel()
 
-    @State private var sessionRole: OperationRole?
+    @AppStorage("horo.appearance") private var appearanceRawValue = AppAppearance.system.rawValue
+    @AppStorage("horo.language") private var languageRawValue = AppLanguage.english.rawValue
+    @State private var sessionAccount: TestAccount?
     @State private var selectedSeerTab: SeerTab = .chat
     @State private var selectedCustomerTab: CustomerTab = .home
+    @State private var customerCoinBalance = 420
     @State private var editorMode: RecordEditorMode?
     @State private var isDeleteConfirmationPresented = false
     @State private var recordPendingDeletion: TestRecord?
 
+    private var selectedAppearance: AppAppearance {
+        AppAppearance(rawValue: appearanceRawValue) ?? .system
+    }
+
+    private var appearance: Binding<AppAppearance> {
+        Binding(
+            get: { selectedAppearance },
+            set: { appearanceRawValue = $0.rawValue }
+        )
+    }
+
+    private var selectedLanguage: AppLanguage {
+        AppLanguage(rawValue: languageRawValue) ?? .english
+    }
+
+    private var language: Binding<AppLanguage> {
+        Binding(
+            get: { selectedLanguage },
+            set: { languageRawValue = $0.rawValue }
+        )
+    }
+
     var body: some View {
         Group {
-            switch sessionRole {
-            case .seer:
-                SeerWorkspaceView(
-                    selectedTab: $selectedSeerTab,
-                    profileViewModel: profileViewModel,
-                    recordViewModel: recordViewModel,
-                    onCreateRecord: { editorMode = .create },
-                    onEditRecord: { editorMode = .edit($0) },
-                    onDeleteRecord: { prepareDelete($0) },
-                    onLogout: logout
-                )
-            case .customer:
-                CustomerWorkspaceView(
-                    selectedTab: $selectedCustomerTab,
-                    onLogout: logout
-                )
-            case nil:
-                LoginView { role in
-                    sessionRole = role
+            if let sessionAccount {
+                switch sessionAccount.role {
+                case .seer:
+                    SeerWorkspaceView(
+                        selectedTab: $selectedSeerTab,
+                        appAppearance: appearance,
+                        appLanguage: language,
+                        testAccount: sessionAccount,
+                        profileViewModel: profileViewModel,
+                        recordViewModel: recordViewModel,
+                        chatStore: chatStore,
+                        supabaseApp: supabaseApp,
+                        onCreateRecord: { editorMode = .create },
+                        onEditRecord: { editorMode = .edit($0) },
+                        onDeleteRecord: { prepareDelete($0) },
+                        onLogout: logout
+                    )
+                case .customer:
+                    CustomerWorkspaceView(
+                        selectedTab: $selectedCustomerTab,
+                        appAppearance: appearance,
+                        appLanguage: language,
+                        testAccount: sessionAccount,
+                        chatStore: chatStore,
+                        supabaseApp: supabaseApp,
+                        coinBalance: $customerCoinBalance,
+                        onLogout: logout
+                    )
+                }
+            } else {
+                LoginView(appLanguage: selectedLanguage) { account, password in
+                    sessionAccount = account
+                    Task {
+                        if let liveCoinBalance = await supabaseApp.signIn(
+                            testAccount: account,
+                            password: password,
+                            chatStore: chatStore
+                        ) {
+                            customerCoinBalance = liveCoinBalance
+                        }
+                    }
                 }
             }
         }
         .tint(.teal)
+        .preferredColorScheme(selectedAppearance.colorScheme)
+        .environment(\.locale, Locale(identifier: selectedLanguage.localeIdentifier))
         .sheet(item: $editorMode) { mode in
             RecordEditorView(mode: mode) { title, notes in
                 switch mode {
@@ -71,7 +122,7 @@ struct ContentView: View {
     }
 
     private func logout() {
-        sessionRole = nil
+        sessionAccount = nil
         selectedSeerTab = .chat
         selectedCustomerTab = .home
         editorMode = nil
@@ -81,9 +132,15 @@ struct ContentView: View {
 
 private struct SeerWorkspaceView: View {
     @Binding var selectedTab: SeerTab
+    @Binding var appAppearance: AppAppearance
+    @Binding var appLanguage: AppLanguage
+
+    let testAccount: TestAccount
 
     @ObservedObject var profileViewModel: UserProfileViewModel
     @ObservedObject var recordViewModel: RecordListViewModel
+    @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
 
     let onCreateRecord: () -> Void
     let onEditRecord: (TestRecord) -> Void
@@ -93,12 +150,14 @@ private struct SeerWorkspaceView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                ChatHomeView(profile: profileViewModel.profile)
+                ChatHomeView(
+                    profile: profileViewModel.profile,
+                    chatStore: chatStore,
+                    supabaseApp: supabaseApp,
+                    appLanguage: appLanguage
+                )
                     .navigationTitle("Chat")
                     .navigationBarTitleDisplayMode(.large)
-                    .toolbar {
-                        logoutToolbarItem
-                    }
             }
             .tabItem {
                 Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
@@ -122,8 +181,6 @@ private struct SeerWorkspaceView: View {
                 .navigationTitle("Dashboard")
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {
-                    logoutToolbarItem
-
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(action: onCreateRecord) {
                             Image(systemName: "plus")
@@ -144,6 +201,9 @@ private struct SeerWorkspaceView: View {
                     activeCount: recordViewModel.activeCount,
                     completedCount: recordViewModel.completedCount,
                     onCreateRecord: onCreateRecord,
+                    appAppearance: $appAppearance,
+                    appLanguage: $appLanguage,
+                    testAccount: testAccount,
                     onLogout: onLogout
                 )
                 .navigationTitle("Profile")
@@ -155,27 +215,30 @@ private struct SeerWorkspaceView: View {
             .tag(SeerTab.profile)
         }
     }
-
-    @ToolbarContentBuilder
-    private var logoutToolbarItem: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button(action: onLogout) {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-            }
-            .accessibilityLabel("Log Out")
-        }
-    }
 }
 
 private struct CustomerWorkspaceView: View {
     @Binding var selectedTab: CustomerTab
+    @Binding var appAppearance: AppAppearance
+    @Binding var appLanguage: AppLanguage
+
+    let testAccount: TestAccount
+    @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+
+    @Binding var coinBalance: Int
 
     let onLogout: () -> Void
 
     var body: some View {
         TabView(selection: $selectedTab) {
             NavigationStack {
-                CustomerHomeView(onOpenChat: { selectedTab = .chat })
+                CustomerHomeView(
+                    supabaseApp: supabaseApp,
+                    chatStore: chatStore,
+                    coinBalance: $coinBalance,
+                    onOpenChat: { selectedTab = .chat }
+                )
                     .navigationTitle("Home")
                     .navigationBarTitleDisplayMode(.large)
             }
@@ -185,7 +248,11 @@ private struct CustomerWorkspaceView: View {
             .tag(CustomerTab.home)
 
             NavigationStack {
-                CustomerChatSpaceView()
+                CustomerChatSpaceView(
+                    chatStore: chatStore,
+                    supabaseApp: supabaseApp,
+                    appLanguage: appLanguage
+                )
                     .navigationTitle("Chat")
                     .navigationBarTitleDisplayMode(.large)
             }
@@ -195,7 +262,13 @@ private struct CustomerWorkspaceView: View {
             .tag(CustomerTab.chat)
 
             NavigationStack {
-                CustomerProfileSpaceView(onLogout: onLogout)
+                CustomerProfileSpaceView(
+                    appAppearance: $appAppearance,
+                    appLanguage: $appLanguage,
+                    testAccount: testAccount,
+                    coinBalance: $coinBalance,
+                    onLogout: onLogout
+                )
                     .navigationTitle("Profile")
                     .navigationBarTitleDisplayMode(.large)
             }
@@ -219,6 +292,108 @@ private enum CustomerTab {
     case profile
 }
 
+private enum AppAppearance: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .system:
+            return "System"
+        case .light:
+            return "Light"
+        case .dark:
+            return "Dark"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .system:
+            return "circle.lefthalf.filled"
+        case .light:
+            return "sun.max.fill"
+        case .dark:
+            return "moon.stars.fill"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system:
+            return nil
+        case .light:
+            return .light
+        case .dark:
+            return .dark
+        }
+    }
+}
+
+private enum AppLanguage: String, CaseIterable, Identifiable {
+    case english
+    case thai
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .english:
+            return "English"
+        case .thai:
+            return "ไทย"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .english:
+            return "Use English app copy"
+        case .thai:
+            return "ใช้ภาษาไทยในแอป"
+        }
+    }
+
+    var localeIdentifier: String {
+        switch self {
+        case .english:
+            return "en_US"
+        case .thai:
+            return "th_TH"
+        }
+    }
+
+    var languageRowTitle: String {
+        switch self {
+        case .english:
+            return "Language"
+        case .thai:
+            return "ภาษา"
+        }
+    }
+
+    var profilePreferenceSubtitle: String {
+        switch self {
+        case .english:
+            return "App display and account settings"
+        case .thai:
+            return "การแสดงผลและตั้งค่าบัญชี"
+        }
+    }
+
+    var passwordOptionalHint: String {
+        switch self {
+        case .english:
+            return "Password optional for test accounts"
+        case .thai:
+            return "บัญชีทดสอบยังไม่ต้องใช้รหัสผ่าน"
+        }
+    }
+}
+
 private enum AppColors {
     static var backgroundBase: Color {
         Color(uiColor: .systemGroupedBackground)
@@ -238,6 +413,34 @@ private enum AppColors {
 
     static var softFill: Color {
         Color(uiColor: .systemFill).opacity(0.42)
+    }
+}
+
+private extension ProfileAvatarStyle {
+    var colors: [Color] {
+        switch self {
+        case .ocean:
+            return [.teal, .blue, .indigo]
+        case .sunrise:
+            return [.orange, .pink, .purple]
+        case .violet:
+            return [.purple, .indigo, .blue]
+        case .forest:
+            return [.green, .teal, .mint]
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .ocean:
+            return "water.waves"
+        case .sunrise:
+            return "sun.max.fill"
+        case .violet:
+            return "sparkles"
+        case .forest:
+            return "leaf.fill"
+        }
     }
 }
 
@@ -301,16 +504,55 @@ private enum OperationRole: String, CaseIterable, Identifiable {
     }
 }
 
+private struct TestAccount: Identifiable, Equatable {
+    let id: String
+    let role: OperationRole
+    let login: String
+    let displayName: String
+    let email: String
+    let subtitle: String
+
+    static let customer = TestAccount(
+        id: "test-customer",
+        role: .customer,
+        login: "customer",
+        displayName: "Mali Chan",
+        email: "customer@horo.test",
+        subtitle: "Customer test account for buying coins and chatting"
+    )
+
+    static let seer = TestAccount(
+        id: "test-seer",
+        role: .seer,
+        login: "seer",
+        displayName: "Aurora Veil",
+        email: "seer@horo.test",
+        subtitle: "Seer test account for receiving customer messages"
+    )
+
+    static let all = [customer, seer]
+
+    static func matching(_ value: String) -> TestAccount? {
+        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        return all.first {
+            $0.login == normalizedValue
+                || $0.email.lowercased() == normalizedValue
+                || $0.role.loginKeyword == normalizedValue
+        }
+    }
+}
+
 private struct LoginView: View {
-    let onLogin: (OperationRole) -> Void
+    let appLanguage: AppLanguage
+    let onLogin: (TestAccount, String) -> Void
 
     @State private var loginText = ""
     @State private var password = ""
     @State private var validationMessage: String?
 
-    private var requestedRole: OperationRole? {
-        let value = loginText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return OperationRole.allCases.first { $0.loginKeyword == value }
+    private var requestedAccount: TestAccount? {
+        TestAccount.matching(loginText)
     }
 
     var body: some View {
@@ -320,7 +562,10 @@ private struct LoginView: View {
                     LoginHero()
 
                     VStack(spacing: 12) {
-                        TextField("Type seer or customer", text: $loginText)
+                        TextField(
+                            appLanguage == .thai ? "พิมพ์ seer หรือ customer" : "Type seer or customer",
+                            text: $loginText
+                        )
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .padding(.horizontal, 14)
@@ -328,7 +573,7 @@ private struct LoginView: View {
                             .background(AppColors.elevatedSurface)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                        SecureField("Password optional", text: $password)
+                        SecureField(appLanguage.passwordOptionalHint, text: $password)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .padding(.horizontal, 14)
@@ -345,7 +590,9 @@ private struct LoginView: View {
 
                         Button(action: submit) {
                             Label(
-                                requestedRole.map { "Login as \($0.title)" } ?? "Login",
+                                requestedAccount.map {
+                                    appLanguage == .thai ? "เข้าสู่ระบบเป็น \($0.role.title)" : "Login as \($0.role.title)"
+                                } ?? (appLanguage == .thai ? "เข้าสู่ระบบ" : "Login"),
                                 systemImage: "arrow.right.circle.fill"
                             )
                             .frame(maxWidth: .infinity)
@@ -358,18 +605,18 @@ private struct LoginView: View {
 
                     VStack(alignment: .leading, spacing: 12) {
                         SectionHeader(
-                            title: "Choose Role",
-                            subtitle: "Tap a role or type its keyword"
+                            title: appLanguage == .thai ? "บัญชีทดสอบ" : "Test Accounts",
+                            subtitle: appLanguage.passwordOptionalHint
                         )
 
-                        ForEach(OperationRole.allCases) { role in
+                        ForEach(TestAccount.all) { account in
                             Button {
-                                loginText = role.loginKeyword
+                                loginText = account.login
                                 validationMessage = nil
                             } label: {
                                 LoginRoleCard(
-                                    role: role,
-                                    isSelected: requestedRole == role
+                                    account: account,
+                                    isSelected: requestedAccount == account
                                 )
                             }
                             .buttonStyle(.plain)
@@ -387,13 +634,13 @@ private struct LoginView: View {
     }
 
     private func submit() {
-        guard let role = requestedRole else {
+        guard let account = requestedAccount else {
             validationMessage = "Use \"seer\" or \"customer\" to enter this mock app."
             return
         }
 
         validationMessage = nil
-        onLogin(role)
+        onLogin(account, password)
     }
 }
 
@@ -432,8 +679,12 @@ private struct LoginHero: View {
 }
 
 private struct LoginRoleCard: View {
-    let role: OperationRole
+    let account: TestAccount
     let isSelected: Bool
+
+    private var role: OperationRole {
+        account.role
+    }
 
     var body: some View {
         HStack(spacing: 14) {
@@ -448,19 +699,24 @@ private struct LoginRoleCard: View {
             .frame(width: 48, height: 48)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(role.title)
+                Text(account.displayName)
                     .font(.headline)
                     .foregroundStyle(.primary)
 
-                Text(role.subtitle)
+                Text(account.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+
+                Text(account.email)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
 
             Spacer()
 
-            Text(role.loginKeyword)
+            Text(account.login)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(role.tint)
                 .padding(.horizontal, 9)
@@ -536,10 +792,23 @@ private struct OperationRoleCard: View {
 
 private struct ChatHomeView: View {
     let profile: UserProfile
+    @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
 
     @State private var searchText = ""
 
-    private let conversations = ChatConversation.mockConversations
+    private var conversations: [ChatConversation] {
+        chatStore.conversations
+    }
+
+    private var queueTitle: String {
+        appLanguage == .thai ? "คิวลูกค้า" : "Customer Queue"
+    }
+
+    private var conversationCountLabel: String {
+        appLanguage == .thai ? "รายการสนทนา" : "conversations"
+    }
 
     private var filteredConversations: [ChatConversation] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -561,20 +830,27 @@ private struct ChatHomeView: View {
             VStack(spacing: 16) {
                 ChatOperationsHeader(profile: profile)
 
+                DataConnectionBanner(
+                    message: supabaseApp.statusMessage,
+                    isConnected: supabaseApp.isConnected
+                )
+
                 QueueMetricsRow(conversations: conversations)
 
                 ConversationSearchField(text: $searchText)
 
                 SectionHeader(
-                    title: "Customer Queue",
-                    subtitle: "\(filteredConversations.count) conversations"
+                    title: queueTitle,
+                    subtitle: "\(filteredConversations.count) \(conversationCountLabel)"
                 )
 
                 LazyVStack(spacing: 12) {
                     ForEach(filteredConversations) { conversation in
                         NavigationLink {
                             MockChatDetailView(
-                                conversation: conversation,
+                                conversationID: conversation.id,
+                                chatStore: chatStore,
+                                supabaseApp: supabaseApp,
                                 seerName: profile.fullName,
                                 seerInitials: profile.initials
                             )
@@ -826,19 +1102,84 @@ private struct ConversationMetaChip: View {
     }
 }
 
+private struct CoinMetaChip: View {
+    let title: String
+    var color: Color = .orange
+
+    var body: some View {
+        HStack(spacing: 5) {
+            HoroCoinIcon(size: 14)
+
+            Text(title)
+                .font(.caption2.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .frame(height: 24)
+        .background(color.opacity(0.13))
+        .clipShape(Capsule())
+    }
+}
+
+private struct HoroCoinIcon: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.93, blue: 0.44),
+                            Color(red: 0.98, green: 0.69, blue: 0.16),
+                            Color(red: 0.80, green: 0.43, blue: 0.08)
+                        ],
+                        center: .topLeading,
+                        startRadius: size * 0.08,
+                        endRadius: size * 0.62
+                    )
+                )
+
+            Circle()
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.70),
+                            Color(red: 0.70, green: 0.33, blue: 0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: max(1.1, size * 0.09)
+                )
+
+            Circle()
+                .strokeBorder(Color.white.opacity(0.36), lineWidth: max(0.8, size * 0.035))
+                .padding(size * 0.18)
+
+            Text("C")
+                .font(.system(size: size * 0.43, weight: .black, design: .rounded))
+                .foregroundStyle(Color(red: 0.38, green: 0.20, blue: 0.04))
+        }
+        .frame(width: size, height: size)
+        .shadow(color: Color.orange.opacity(0.18), radius: size * 0.10, x: 0, y: size * 0.04)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct MockChatDetailView: View {
-    let conversation: ChatConversation
+    let conversationID: UUID
+    @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
     let seerName: String
     let seerInitials: String
 
-    @State private var messages: [ChatMessage]
     @State private var draft = ""
 
-    init(conversation: ChatConversation, seerName: String, seerInitials: String) {
-        self.conversation = conversation
-        self.seerName = seerName
-        self.seerInitials = seerInitials
-        _messages = State(initialValue: conversation.messages)
+    private var conversation: ChatConversation {
+        chatStore.conversation(id: conversationID) ?? .emptyTestConversation
     }
 
     var body: some View {
@@ -848,7 +1189,7 @@ private struct MockChatDetailView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(messages) { message in
+                        ForEach(conversation.messages) { message in
                             ChatBubble(
                                 message: message,
                                 customerInitials: conversation.initials,
@@ -864,7 +1205,7 @@ private struct MockChatDetailView: View {
                 .onAppear {
                     scrollToLatestMessage(with: proxy)
                 }
-                .onChange(of: messages.count) { _, _ in
+                .onChange(of: conversation.messages.count) { _, _ in
                     scrollToLatestMessage(with: proxy)
                 }
             }
@@ -903,19 +1244,28 @@ private struct MockChatDetailView: View {
             return
         }
 
-        messages.append(
-            ChatMessage(
+        draft = ""
+
+        Task {
+            let didSendToSupabase = await supabaseApp.sendMessage(
+                conversationID: conversationID,
                 sender: .seer,
                 text: cleanDraft,
-                timestamp: Date()
+                chatStore: chatStore
             )
-        )
 
-        draft = ""
+            if !didSendToSupabase {
+                chatStore.sendMessage(
+                    conversationID: conversationID,
+                    sender: .seer,
+                    text: cleanDraft
+                )
+            }
+        }
     }
 
     private func scrollToLatestMessage(with proxy: ScrollViewProxy) {
-        guard let id = messages.last?.id else {
+        guard let id = conversation.messages.last?.id else {
             return
         }
 
@@ -1251,16 +1601,18 @@ private enum ConversationPriority: Equatable {
 
 private struct ChatConversation: Identifiable {
     let id = UUID()
+    let seerName: String = "Aurora Veil"
+    let seerId: String = "S-8001"
     let customerName: String
     let customerId: String
     let topic: String
-    let status: ConversationStatus
+    var status: ConversationStatus
     let priority: ConversationPriority
     let accountTier: String
     let waitTime: String
-    let unreadCount: Int
+    var unreadCount: Int
     let tint: Color
-    let messages: [ChatMessage]
+    var messages: [ChatMessage]
     let quickReplies: [String]
 
     var initials: String {
@@ -1275,11 +1627,45 @@ private struct ChatConversation: Identifiable {
         return value.isEmpty ? "C" : value
     }
 
+    var seerInitials: String {
+        let value = seerName
+            .split(separator: " ")
+            .prefix(2)
+            .compactMap(\.first)
+            .map(String.init)
+            .joined()
+            .uppercased()
+
+        return value.isEmpty ? "S" : value
+    }
+
     var lastMessage: ChatMessage {
         messages.last ?? ChatMessage(
             sender: .system,
             text: "No messages yet.",
             timestamp: Date()
+        )
+    }
+
+    static var emptyTestConversation: ChatConversation {
+        ChatConversation(
+            customerName: "Test Customer",
+            customerId: "C-TEST",
+            topic: "Test API chat",
+            status: .active,
+            priority: .normal,
+            accountTier: "Test",
+            waitTime: "Now",
+            unreadCount: 0,
+            tint: .teal,
+            messages: [
+                ChatMessage(
+                    sender: .system,
+                    text: "This test conversation is no longer available.",
+                    timestamp: Date()
+                )
+            ],
+            quickReplies: []
         )
     }
 
@@ -1396,6 +1782,47 @@ private struct ChatConversation: Identifiable {
     ]
 }
 
+@MainActor
+private final class TestChatViewModel: ObservableObject {
+    @Published private(set) var conversations: [ChatConversation]
+
+    init(conversations: [ChatConversation] = ChatConversation.mockConversations) {
+        self.conversations = conversations
+    }
+
+    func conversation(id: UUID) -> ChatConversation? {
+        conversations.first { $0.id == id }
+    }
+
+    func sendMessage(conversationID: UUID, sender: ChatMessage.Sender, text: String) {
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleanText.isEmpty,
+              let index = conversations.firstIndex(where: { $0.id == conversationID })
+        else {
+            return
+        }
+
+        conversations[index].messages.append(
+            ChatMessage(
+                sender: sender,
+                text: cleanText,
+                timestamp: Date()
+            )
+        )
+        conversations[index].status = .active
+
+        switch sender {
+        case .customer:
+            conversations[index].unreadCount += 1
+        case .seer:
+            conversations[index].unreadCount = 0
+        case .system:
+            break
+        }
+    }
+}
+
 private struct ConversationAvatar: View {
     let conversation: ChatConversation
     let size: CGFloat
@@ -1437,6 +1864,10 @@ private struct MiniAvatar: View {
 }
 
 private struct CustomerHomeView: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    @ObservedObject var chatStore: TestChatViewModel
+    @Binding var coinBalance: Int
+
     let onOpenChat: () -> Void
 
     @State private var selectedMenu: CustomerHomeMenu = .overview
@@ -1444,7 +1875,9 @@ private struct CustomerHomeView: View {
 
     private let profile = CustomerMockProfile.default
     private let readings = CustomerReading.mockReadings
-    private let seers = CustomerSeer.mockSeers
+    private var seers: [CustomerSeer] {
+        supabaseApp.seers.isEmpty ? CustomerSeer.mockSeers : supabaseApp.seers
+    }
 
     private var filteredSeers: [CustomerSeer] {
         let query = seerSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1461,7 +1894,16 @@ private struct CustomerHomeView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
-                CustomerHeroCard(profile: profile, onOpenChat: onOpenChat)
+                CustomerHeroCard(
+                    profile: profile,
+                    coinBalance: supabaseApp.walletAvailableCoin ?? coinBalance,
+                    onOpenChat: onOpenChat
+                )
+
+                DataConnectionBanner(
+                    message: supabaseApp.statusMessage,
+                    isConnected: supabaseApp.isConnected
+                )
 
                 CustomerHomeMenuPicker(selection: $selectedMenu)
 
@@ -1487,12 +1929,22 @@ private struct CustomerHomeView: View {
                         }
                     }
 
-                    CustomerFeaturedSeersPreview(seers: Array(seers.prefix(2)))
+                    CustomerFeaturedSeersPreview(
+                        supabaseApp: supabaseApp,
+                        chatStore: chatStore,
+                        coinBalance: $coinBalance,
+                        seers: Array(seers.prefix(2)),
+                        onOpenChat: onOpenChat
+                    )
                 case .findSeer:
                     CustomerSeerDiscoveryView(
                         searchText: $seerSearchText,
+                        supabaseApp: supabaseApp,
+                        chatStore: chatStore,
+                        coinBalance: $coinBalance,
                         seers: filteredSeers,
-                        allSeerCount: seers.count
+                        allSeerCount: seers.count,
+                        onOpenChat: onOpenChat
                     )
                 }
             }
@@ -1506,6 +1958,7 @@ private struct CustomerHomeView: View {
 
 private struct CustomerHeroCard: View {
     let profile: CustomerMockProfile
+    let coinBalance: Int
     let onOpenChat: () -> Void
 
     var body: some View {
@@ -1528,6 +1981,16 @@ private struct CustomerHeroCard: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.teal)
                     .lineLimit(1)
+
+                HStack(spacing: 5) {
+                    HoroCoinIcon(size: 16)
+
+                    Text("\(coinBalance) coins")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                }
+                .padding(.top, 2)
             }
 
             Spacer(minLength: 8)
@@ -1766,7 +2229,11 @@ private struct CustomerHomeMenuPicker: View {
 }
 
 private struct CustomerFeaturedSeersPreview: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    @Binding var coinBalance: Int
+
     let seers: [CustomerSeer]
+    let onOpenChat: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1778,7 +2245,12 @@ private struct CustomerFeaturedSeersPreview: View {
             LazyVStack(spacing: 12) {
                 ForEach(seers) { seer in
                     NavigationLink {
-                        CustomerSeerProfileView(seer: seer)
+                        CustomerSeerProfileView(
+                            seer: seer,
+                            supabaseApp: supabaseApp,
+                            coinBalance: $coinBalance,
+                            onOpenChat: onOpenChat
+                        )
                     } label: {
                         CustomerSeerCard(seer: seer)
                     }
@@ -1791,9 +2263,17 @@ private struct CustomerFeaturedSeersPreview: View {
 
 private struct CustomerSeerDiscoveryView: View {
     @Binding var searchText: String
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    @Binding var coinBalance: Int
 
     let seers: [CustomerSeer]
     let allSeerCount: Int
+    let onOpenChat: () -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1825,12 +2305,17 @@ private struct CustomerSeerDiscoveryView: View {
                 .padding(16)
                 .cardStyle()
             } else {
-                LazyVStack(spacing: 12) {
+                LazyVGrid(columns: columns, spacing: 10) {
                     ForEach(seers) { seer in
                         NavigationLink {
-                            CustomerSeerProfileView(seer: seer)
+                            CustomerSeerProfileView(
+                                seer: seer,
+                                supabaseApp: supabaseApp,
+                                coinBalance: $coinBalance,
+                                onOpenChat: onOpenChat
+                            )
                         } label: {
-                            CustomerSeerCard(seer: seer)
+                            CustomerSeerGridCard(seer: seer)
                         }
                         .buttonStyle(.plain)
                     }
@@ -1845,7 +2330,7 @@ private struct CustomerSeerCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            CustomerSeerAvatar(seer: seer, size: 54)
+            CustomerSeerPhotoView(seer: seer, width: 64, height: 72)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1883,7 +2368,7 @@ private struct CustomerSeerCard: View {
                 .scrollIndicators(.hidden)
 
                 HStack(spacing: 8) {
-                    ConversationMetaChip(title: seer.rate, color: .blue, icon: "creditcard.fill")
+                    CoinMetaChip(title: seer.rate)
                     ConversationMetaChip(title: seer.nextAvailable, color: .green, icon: "clock.fill")
                 }
             }
@@ -1898,23 +2383,92 @@ private struct CustomerSeerCard: View {
     }
 }
 
-private struct CustomerSeerAvatar: View {
+private struct CustomerSeerGridCard: View {
     let seer: CustomerSeer
-    let size: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            CustomerSeerPhotoView(seer: seer, height: 104)
+                .overlay(alignment: .topTrailing) {
+                    Label(seer.rating, systemImage: "star.fill")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.yellow)
+                        .padding(.horizontal, 7)
+                        .frame(height: 24)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .padding(8)
+                }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(seer.name)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(seer.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(seer.tint)
+                    .lineLimit(2)
+
+                Text(seer.specialty)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 6) {
+                ForEach(Array(seer.skills.prefix(2)), id: \.self) { skill in
+                    SeerTag(title: skill, color: seer.tint)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 6) {
+                CoinMetaChip(title: seer.rate)
+                ConversationMetaChip(title: seer.nextAvailable, color: .green, icon: "clock.fill")
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 232, alignment: .topLeading)
+        .padding(12)
+        .cardStyle(borderColor: seer.tint.opacity(0.32))
+    }
+}
+
+private struct CustomerSeerPhotoView: View {
+    let seer: CustomerSeer
+    var width: CGFloat?
+    let height: CGFloat
 
     var body: some View {
         ZStack {
-            Circle()
-                .fill(seer.tint.opacity(0.16))
+            LinearGradient(
+                colors: seer.pictureColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
 
-            Circle()
-                .stroke(seer.tint.opacity(0.28), lineWidth: 1)
+            Image(systemName: "sparkles")
+                .font(.system(size: height * 0.34, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.22))
+                .offset(x: height * 0.26, y: -height * 0.18)
 
             Text(seer.initials)
-                .font(.system(size: size * 0.31, weight: .bold))
-                .foregroundStyle(seer.tint)
+                .font(.system(size: height * 0.24, weight: .bold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
         }
-        .frame(width: size, height: size)
+        .frame(width: width, height: height)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.28), lineWidth: 1)
+        }
+        .accessibilityLabel("\(seer.name) Profile Picture")
     }
 }
 
@@ -1951,6 +2505,14 @@ private struct SeerTag: View {
 
 private struct CustomerSeerProfileView: View {
     let seer: CustomerSeer
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    @Binding var coinBalance: Int
+
+    let onOpenChat: () -> Void
+
+    @State private var isAddFundsSheetPresented = false
+    @State private var activeNotice: CustomerSeerActionNotice?
+    @State private var topUpReason = "Add THB to coins before starting a seer call."
 
     private let skillColumns = [
         GridItem(.adaptive(minimum: 112), spacing: 8)
@@ -1959,7 +2521,22 @@ private struct CustomerSeerProfileView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                CustomerSeerProfileHero(seer: seer)
+                CustomerSeerProfileHero(
+                    seer: seer,
+                    coinBalance: coinBalance,
+                    onBookReading: bookReading,
+                    onMessage: messageSeer,
+                    onAddCoins: {
+                        topUpReason = "Add THB to coins to book or call \(seer.name)."
+                        isAddFundsSheetPresented = true
+                    }
+                )
+
+                SeerCallOptionsSection(
+                    seer: seer,
+                    coinBalance: coinBalance,
+                    onSelect: handleCallOption
+                )
 
                 VStack(alignment: .leading, spacing: 12) {
                     SectionHeader(
@@ -2010,15 +2587,65 @@ private struct CustomerSeerProfileView: View {
         .background(AppBackground())
         .navigationTitle(seer.name)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $isAddFundsSheetPresented) {
+            AddFundsSheet(
+                coinBalance: $coinBalance,
+                reason: topUpReason
+            )
+        }
+        .alert(item: $activeNotice) { notice in
+            Alert(
+                title: Text(notice.title),
+                message: Text(notice.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+    }
+
+    private func bookReading() {
+        activeNotice = CustomerSeerActionNotice(
+            title: "Booking Requested",
+            message: "A mock reading request was sent to \(seer.name)."
+        )
+    }
+
+    private func messageSeer() {
+        Task {
+            await supabaseApp.startQuestion(
+                with: seer,
+                firstMessage: "Hi \(seer.name), I would like to start a reading.",
+                chatStore: TestChatViewModelProxy.shared(chatStoreNotAvailableMessage: "")
+            )
+        }
+
+        onOpenChat()
+    }
+
+    private func handleCallOption(_ option: SeerCallOption) {
+        guard coinBalance >= option.coinCost else {
+            topUpReason = "\(option.title) with \(seer.name) requires \(option.coinCost) coins."
+            isAddFundsSheetPresented = true
+            return
+        }
+
+        coinBalance -= option.coinCost
+        activeNotice = CustomerSeerActionNotice(
+            title: "Call Booked",
+            message: "\(option.title) with \(seer.name) is booked. \(option.coinCost) coins were used."
+        )
     }
 }
 
 private struct CustomerSeerProfileHero: View {
     let seer: CustomerSeer
+    let coinBalance: Int
+    let onBookReading: () -> Void
+    let onMessage: () -> Void
+    let onAddCoins: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
-            CustomerSeerAvatar(seer: seer, size: 86)
+            CustomerSeerPhotoView(seer: seer, height: 180)
 
             VStack(spacing: 5) {
                 Text(seer.name)
@@ -2041,17 +2668,140 @@ private struct CustomerSeerProfileHero: View {
                 ConversationMetaChip(title: seer.nextAvailable, color: .green, icon: "clock.fill")
             }
 
-            Button {
-            } label: {
-                Label("Start Mock Reading", systemImage: "sparkles")
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                CoinMetaChip(title: "\(coinBalance) coins", color: .indigo)
+
+                Button(action: onAddCoins) {
+                    Label("Add Coins", systemImage: "plus.circle.fill")
+                        .font(.caption.weight(.bold))
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+
+            HStack(spacing: 10) {
+                Button(action: onMessage) {
+                    Label("Message", systemImage: "bubble.left.and.bubble.right.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button(action: onBookReading) {
+                    Label("Book", systemImage: "calendar.badge.plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
         }
         .padding(16)
         .cardStyle(borderColor: seer.tint.opacity(0.34))
     }
+}
+
+private struct SeerCallOptionsSection: View {
+    let seer: CustomerSeer
+    let coinBalance: Int
+    let onSelect: (SeerCallOption) -> Void
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 96), spacing: 10)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: "Call Seer",
+                subtitle: "Calls use your in-app coins"
+            )
+
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(SeerCallOption.allCases) { option in
+                    Button {
+                        onSelect(option)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Image(systemName: option.icon)
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(seer.tint)
+
+                                HoroCoinIcon(size: 22)
+                            }
+
+                            Text(option.title)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+
+                            HStack(spacing: 5) {
+                                HoroCoinIcon(size: 14)
+
+                                Text("\(option.coinCost) coins")
+                                    .font(.caption.weight(.bold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.82)
+                            }
+                            .foregroundStyle(coinBalance >= option.coinCost ? .green : .orange)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 116, alignment: .leading)
+                        .padding(12)
+                        .cardStyle(borderColor: seer.tint.opacity(0.28))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Book \(option.title)")
+                }
+            }
+        }
+    }
+}
+
+private enum SeerCallOption: String, CaseIterable, Identifiable {
+    case fifteen
+    case thirty
+    case sixty
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fifteen:
+            return "15 mins"
+        case .thirty:
+            return "30 mins"
+        case .sixty:
+            return "1 hr"
+        }
+    }
+
+    var coinCost: Int {
+        switch self {
+        case .fifteen:
+            return 199
+        case .thirty:
+            return 349
+        case .sixty:
+            return 599
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .fifteen:
+            return "phone.fill"
+        case .thirty:
+            return "phone.connection.fill"
+        case .sixty:
+            return "phone.circle.fill"
+        }
+    }
+}
+
+private struct CustomerSeerActionNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }
 
 private struct SeerStyleRow: View {
@@ -2080,21 +2830,37 @@ private struct SeerStyleRow: View {
 }
 
 private struct CustomerChatSpaceView: View {
-    private let conversations = CustomerConversation.mockConversations
+    @ObservedObject var chatStore: TestChatViewModel
+    let appLanguage: AppLanguage
+
+    private var conversations: [ChatConversation] {
+        chatStore.conversations
+    }
+
+    private var title: String {
+        appLanguage == .thai ? "แชทกับหมอดู" : "My Seer Chats"
+    }
+
+    private var subtitle: String {
+        appLanguage == .thai ? "ข้อความทดสอบผ่าน mock API" : "Shared test API messages"
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 12) {
                     SectionHeader(
-                        title: "My Seer Chats",
-                        subtitle: "Mock messages from active and past readings"
+                        title: title,
+                        subtitle: subtitle
                     )
 
                     LazyVStack(spacing: 12) {
                         ForEach(conversations) { conversation in
                             NavigationLink {
-                                CustomerChatDetailView(conversation: conversation)
+                                CustomerChatDetailView(
+                                    conversationID: conversation.id,
+                                    chatStore: chatStore
+                                )
                             } label: {
                                 CustomerConversationRow(conversation: conversation)
                             }
@@ -2112,7 +2878,7 @@ private struct CustomerChatSpaceView: View {
 }
 
 private struct CustomerConversationRow: View {
-    let conversation: CustomerConversation
+    let conversation: ChatConversation
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -2147,7 +2913,7 @@ private struct CustomerConversationRow: View {
                     .lineLimit(2)
 
                 ConversationMetaChip(
-                    title: conversation.status,
+                    title: conversation.status.title,
                     color: conversation.tint,
                     icon: "sparkles"
                 )
@@ -2164,14 +2930,13 @@ private struct CustomerConversationRow: View {
 }
 
 private struct CustomerChatDetailView: View {
-    let conversation: CustomerConversation
+    let conversationID: UUID
+    @ObservedObject var chatStore: TestChatViewModel
 
-    @State private var messages: [ChatMessage]
     @State private var draft = ""
 
-    init(conversation: CustomerConversation) {
-        self.conversation = conversation
-        _messages = State(initialValue: conversation.messages)
+    private var conversation: ChatConversation {
+        chatStore.conversation(id: conversationID) ?? .emptyTestConversation
     }
 
     var body: some View {
@@ -2181,7 +2946,7 @@ private struct CustomerChatDetailView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(messages) { message in
+                        ForEach(conversation.messages) { message in
                             CustomerChatBubble(
                                 message: message,
                                 seerInitials: conversation.seerInitials
@@ -2195,7 +2960,7 @@ private struct CustomerChatDetailView: View {
                 .onAppear {
                     scrollToLatestMessage(with: proxy)
                 }
-                .onChange(of: messages.count) { _, _ in
+                .onChange(of: conversation.messages.count) { _, _ in
                     scrollToLatestMessage(with: proxy)
                 }
             }
@@ -2219,18 +2984,17 @@ private struct CustomerChatDetailView: View {
             return
         }
 
-        messages.append(
-            ChatMessage(
-                sender: .customer,
-                text: cleanDraft,
-                timestamp: Date()
-            )
+        chatStore.sendMessage(
+            conversationID: conversationID,
+            sender: .customer,
+            text: cleanDraft
         )
+
         draft = ""
     }
 
     private func scrollToLatestMessage(with proxy: ScrollViewProxy) {
-        guard let id = messages.last?.id else {
+        guard let id = conversation.messages.last?.id else {
             return
         }
 
@@ -2241,7 +3005,7 @@ private struct CustomerChatDetailView: View {
 }
 
 private struct CustomerChatHeader: View {
-    let conversation: CustomerConversation
+    let conversation: ChatConversation
 
     var body: some View {
         HStack(spacing: 12) {
@@ -2261,7 +3025,7 @@ private struct CustomerChatHeader: View {
                     .lineLimit(1)
 
                 ConversationMetaChip(
-                    title: conversation.status,
+                    title: conversation.status.title,
                     color: conversation.tint,
                     icon: "sparkles"
                 )
@@ -2324,31 +3088,41 @@ private struct CustomerChatBubble: View {
 }
 
 private struct CustomerProfileSpaceView: View {
+    @Binding var appAppearance: AppAppearance
+    @Binding var appLanguage: AppLanguage
+
+    let testAccount: TestAccount
+
+    @Binding var coinBalance: Int
+
     let onLogout: () -> Void
 
-    private let profile = CustomerMockProfile.default
+    @State private var isAddFundsSheetPresented = false
+    @State private var editableProfile = CustomerMockProfile.default.userProfile
+
+    private let profileDetails = CustomerMockProfile.default
 
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
                 VStack(spacing: 14) {
                     ProfilePhotoView(
-                        profile: profile.userProfile,
-                        size: 110,
+                        profile: editableProfile,
+                        size: 138,
                         showsCameraBadge: true
                     )
 
                     VStack(spacing: 5) {
-                        Text(profile.fullName)
+                        Text(editableProfile.fullName)
                             .font(.title2.bold())
 
-                        Text(profile.birthInfo)
+                        Text(editableProfile.location)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
                         HStack(spacing: 8) {
                             StatusBadge(title: "Customer", color: .indigo)
-                            StatusBadge(title: profile.memberTier, color: .teal)
+                            StatusBadge(title: profileDetails.memberTier, color: .teal)
                         }
                         .padding(.top, 4)
                     }
@@ -2357,46 +3131,349 @@ private struct CustomerProfileSpaceView: View {
                 .padding(22)
                 .cardStyle()
 
+                CustomerWalletSection(
+                    coinBalance: coinBalance,
+                    onAddCoins: { isAddFundsSheetPresented = true }
+                )
+
                 VStack(alignment: .leading, spacing: 12) {
                     SectionHeader(title: "Account", subtitle: "Mock customer information")
 
                     VStack(spacing: 0) {
-                        ProfileDetailRow(icon: "envelope", title: "Email", value: profile.email)
+                        ProfileDetailRow(icon: "person.text.rectangle", title: "Test Login", value: testAccount.login)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "sparkles", title: "Focus", value: profile.focus)
+                        ProfileDetailRow(icon: "at", title: "Test Email", value: testAccount.email)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "calendar", title: "Birth Info", value: profile.birthInfo)
+                        ProfileDetailRow(icon: "envelope", title: "Email", value: editableProfile.email)
+                        Divider().padding(.leading, 40)
+                        ProfileDetailRow(icon: "sparkles", title: "Focus", value: profileDetails.focus)
+                        Divider().padding(.leading, 40)
+                        ProfileDetailRow(icon: "calendar", title: "Birth Info", value: editableProfile.location)
                     }
                     .padding(.vertical, 4)
                     .cardStyle()
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
-                    SectionHeader(title: "Preferences", subtitle: "Customer space settings")
+                    SectionHeader(title: "Preferences", subtitle: appLanguage.profilePreferenceSubtitle)
 
                     VStack(spacing: 0) {
                         ProfileDetailRow(icon: "bell.badge", title: "Reading Alerts", value: "Enabled")
                         Divider().padding(.leading, 40)
                         ProfileDetailRow(icon: "lock.shield", title: "Role Access", value: "Customer")
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "moon.stars", title: "Appearance", value: "System")
+                        AppearancePickerRow(selection: $appAppearance)
+                        Divider().padding(.leading, 40)
+                        LanguagePickerRow(selection: $appLanguage)
                     }
                     .padding(.vertical, 4)
                     .cardStyle()
                 }
 
-                Button(role: .destructive, action: onLogout) {
-                    Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+                ProfileLogoutButton(action: onLogout)
             }
             .padding(16)
             .padding(.bottom, 8)
         }
         .scrollIndicators(.hidden)
         .background(AppBackground())
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    ProfileEditorView(
+                        profile: editableProfile,
+                        onSave: { editableProfile = $0 }
+                    )
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .accessibilityLabel("Edit Profile")
+            }
+        }
+        .sheet(isPresented: $isAddFundsSheetPresented) {
+            AddFundsSheet(
+                coinBalance: $coinBalance,
+                reason: "Add THB to get coins for readings and seer calls."
+            )
+        }
+    }
+}
+
+private struct CustomerWalletSection: View {
+    let coinBalance: Int
+    let onAddCoins: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Coin Wallet", subtitle: "Add THB to get in-app coins")
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    HoroCoinIcon(size: 52)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(coinBalance) coins")
+                            .font(.title3.bold().monospacedDigit())
+
+                        Text("Coins are used for seer calls and paid readings")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 8)
+                }
+
+                Button(action: onAddCoins) {
+                    Label("Add THB to Coins", systemImage: "plus.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+            .padding(16)
+            .cardStyle(borderColor: Color.orange.opacity(0.34))
+        }
+    }
+}
+
+private struct AddFundsSheet: View {
+    @Binding var coinBalance: Int
+
+    let reason: String
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedOption = WalletTopUpOption.options[1]
+    @State private var selectedMethod: MockPaymentMethod = .applePay
+    @State private var didCompletePayment = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Current Balance")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+
+                        HStack(alignment: .center, spacing: 10) {
+                            HoroCoinIcon(size: 40)
+
+                            Text("\(coinBalance)")
+                                .font(.largeTitle.bold().monospacedDigit())
+
+                            Text("coins")
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text(reason)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .cardStyle(borderColor: Color.orange.opacity(0.34))
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Top Up", subtitle: "Pay THB and receive in-app coins")
+
+                        LazyVStack(spacing: 10) {
+                            ForEach(WalletTopUpOption.options) { option in
+                                Button {
+                                    selectedOption = option
+                                } label: {
+                                    WalletTopUpOptionRow(
+                                        option: option,
+                                        isSelected: selectedOption == option
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(title: "Payment", subtitle: "Mock payment method")
+
+                        LazyVStack(spacing: 10) {
+                            ForEach(MockPaymentMethod.allCases) { method in
+                                Button {
+                                    selectedMethod = method
+                                } label: {
+                                    MockPaymentMethodRow(
+                                        method: method,
+                                        isSelected: selectedMethod == method
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Button(action: completePayment) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "lock.fill")
+                            Text("Pay \(selectedOption.priceLabel)")
+                            HoroCoinIcon(size: 18)
+                            Text("+\(selectedOption.coins) coins")
+                        }
+                        .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                }
+                .padding(16)
+                .padding(.bottom, 8)
+            }
+            .scrollIndicators(.hidden)
+            .background(AppBackground())
+            .navigationTitle("Add Coins")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+            .alert("Payment Complete", isPresented: $didCompletePayment) {
+                Button("Done") {
+                    dismiss()
+                }
+            } message: {
+                Text("\(selectedOption.coins) coins were added after paying \(selectedOption.priceLabel) with \(selectedMethod.title).")
+            }
+        }
+    }
+
+    private func completePayment() {
+        coinBalance += selectedOption.coins
+        didCompletePayment = true
+    }
+}
+
+private struct WalletTopUpOptionRow: View {
+    let option: WalletTopUpOption
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(isSelected ? .teal : .secondary)
+
+            HoroCoinIcon(size: 32)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(option.coins) coins")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(option.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(option.priceLabel)
+                .font(.headline)
+                .foregroundStyle(.primary)
+        }
+        .padding(14)
+        .cardStyle(borderColor: isSelected ? Color.teal.opacity(0.48) : AppColors.border)
+    }
+}
+
+private struct WalletTopUpOption: Identifiable, Equatable {
+    let id: String
+    let coins: Int
+    let priceLabel: String
+    let subtitle: String
+
+    static let options = [
+        WalletTopUpOption(
+            id: "starter",
+            coins: 200,
+            priceLabel: "THB 200",
+            subtitle: "Starter coin pack for short calls"
+        ),
+        WalletTopUpOption(
+            id: "popular",
+            coins: 500,
+            priceLabel: "THB 500",
+            subtitle: "Popular coin pack for chat and 30 min calls"
+        ),
+        WalletTopUpOption(
+            id: "deep",
+            coins: 1_000,
+            priceLabel: "THB 1,000",
+            subtitle: "Deep reading coin pack for longer sessions"
+        )
+    ]
+}
+
+private enum MockPaymentMethod: String, CaseIterable, Identifiable {
+    case applePay
+    case card
+    case qrPayment
+    case promo
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .applePay:
+            return "Apple Pay"
+        case .card:
+            return "Card"
+        case .qrPayment:
+            return "QR Payment"
+        case .promo:
+            return "Promo"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .applePay:
+            return "apple.logo"
+        case .card:
+            return "banknote.fill"
+        case .qrPayment:
+            return "qrcode"
+        case .promo:
+            return "giftcard.fill"
+        }
+    }
+}
+
+private struct MockPaymentMethodRow: View {
+    let method: MockPaymentMethod
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: method.icon)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(isSelected ? .teal : .secondary)
+                .frame(width: 28)
+
+            Text(method.title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 8)
+
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isSelected ? .teal : .secondary)
+        }
+        .padding(14)
+        .cardStyle(borderColor: isSelected ? Color.teal.opacity(0.48) : AppColors.border)
     }
 }
 
@@ -2414,7 +3491,8 @@ private struct CustomerMockProfile {
             role: "Customer",
             email: email,
             phone: "",
-            location: birthInfo
+            location: birthInfo,
+            avatarStyle: .sunrise
         )
     }
 
@@ -2460,6 +3538,14 @@ private struct CustomerSeer: Identifiable {
             .lowercased()
     }
 
+    var pictureColors: [Color] {
+        [
+            tint.opacity(0.92),
+            Color.blue.opacity(0.72),
+            Color.indigo.opacity(0.88)
+        ]
+    }
+
     static let mockSeers = [
         CustomerSeer(
             name: "Aurora Veil",
@@ -2467,7 +3553,7 @@ private struct CustomerSeer: Identifiable {
             specialty: "Soft guidance for love, reconnecting, and emotional timing.",
             rating: "4.9",
             reviewCount: 218,
-            rate: "$18",
+            rate: "180 coins",
             nextAvailable: "Now",
             skills: ["Relationship", "Timing", "Tarot", "Birth Chart"],
             styles: ["Gentle and reflective", "Clear next steps", "Good for emotional questions"],
@@ -2480,7 +3566,7 @@ private struct CustomerSeer: Identifiable {
             specialty: "Practical readings for work decisions, interviews, and pivots.",
             rating: "4.8",
             reviewCount: 176,
-            rate: "$15",
+            rate: "150 coins",
             nextAvailable: "5m",
             skills: ["Career", "Decision", "Astrology", "Strategy"],
             styles: ["Direct and practical", "Structured summary", "Best for planning"],
@@ -2493,7 +3579,7 @@ private struct CustomerSeer: Identifiable {
             specialty: "Fast daily check-ins for mood, focus, and personal energy.",
             rating: "4.7",
             reviewCount: 142,
-            rate: "$9",
+            rate: "90 coins",
             nextAvailable: "12m",
             skills: ["Daily Card", "Energy", "Mindset", "Focus"],
             styles: ["Warm and concise", "Action-focused", "Good for quick readings"],
@@ -2506,7 +3592,7 @@ private struct CustomerSeer: Identifiable {
             specialty: "Pattern reading for dreams, recurring symbols, and intuition.",
             rating: "4.9",
             reviewCount: 96,
-            rate: "$21",
+            rate: "210 coins",
             nextAvailable: "30m",
             skills: ["Dreams", "Symbols", "Intuition", "Journaling"],
             styles: ["Curious and detailed", "Symbol-by-symbol", "Best with context"],
@@ -2519,7 +3605,7 @@ private struct CustomerSeer: Identifiable {
             specialty: "Supportive readings for stressful choices and relationship boundaries.",
             rating: "4.6",
             reviewCount: 121,
-            rate: "$12",
+            rate: "120 coins",
             nextAvailable: "1h",
             skills: ["Boundaries", "Stress", "Relationships", "Clarity"],
             styles: ["Reassuring tone", "Slow and careful", "Good for sensitive topics"],
@@ -3027,6 +4113,10 @@ private struct ProfilePageView: View {
     let activeCount: Int
     let completedCount: Int
     let onCreateRecord: () -> Void
+    @Binding var appAppearance: AppAppearance
+    @Binding var appLanguage: AppLanguage
+
+    let testAccount: TestAccount
     let onLogout: () -> Void
 
     var body: some View {
@@ -3036,7 +4126,10 @@ private struct ProfilePageView: View {
 
                 RoleOverviewSection(activeRole: .seer)
 
-                ProfileContactSection(profile: profileViewModel.profile)
+                ProfileContactSection(
+                    profile: profileViewModel.profile,
+                    testAccount: testAccount
+                )
 
                 ProfileActivitySection(
                     totalCount: totalCount,
@@ -3045,7 +4138,12 @@ private struct ProfilePageView: View {
                     onCreateRecord: onCreateRecord
                 )
 
-                ProfileSettingsSection()
+                ProfileSettingsSection(
+                    appAppearance: $appAppearance,
+                    appLanguage: $appLanguage
+                )
+
+                ProfileLogoutButton(action: onLogout)
             }
             .padding(16)
             .padding(.bottom, 8)
@@ -3053,13 +4151,6 @@ private struct ProfilePageView: View {
         .scrollIndicators(.hidden)
         .background(AppBackground())
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: onLogout) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                }
-                .accessibilityLabel("Log Out")
-            }
-
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
                     ProfileEditorView(
@@ -3082,7 +4173,7 @@ private struct ProfileHeroCard: View {
         VStack(spacing: 14) {
             ProfilePhotoView(
                 profile: profile,
-                size: 110,
+                size: 138,
                 showsCameraBadge: true
             )
 
@@ -3111,12 +4202,17 @@ private struct ProfileHeroCard: View {
 
 private struct ProfileContactSection: View {
     let profile: UserProfile
+    let testAccount: TestAccount
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(title: "Contact", subtitle: "Seer profile detail")
 
             VStack(spacing: 0) {
+                ProfileDetailRow(icon: "person.text.rectangle", title: "Test Login", value: testAccount.login)
+                Divider().padding(.leading, 40)
+                ProfileDetailRow(icon: "at", title: "Test Email", value: testAccount.email)
+                Divider().padding(.leading, 40)
                 ProfileDetailRow(icon: "envelope", title: "Email", value: profile.email)
                 Divider().padding(.leading, 40)
                 ProfileDetailRow(icon: "phone", title: "Phone", value: profile.phone)
@@ -3163,20 +4259,109 @@ private struct ProfileActivitySection: View {
 }
 
 private struct ProfileSettingsSection: View {
+    @Binding var appAppearance: AppAppearance
+    @Binding var appLanguage: AppLanguage
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Workspace", subtitle: "Mock seer preferences")
+            SectionHeader(title: "Workspace", subtitle: appLanguage.profilePreferenceSubtitle)
 
             VStack(spacing: 0) {
                 ProfileDetailRow(icon: "bell.badge", title: "Queue Alerts", value: "Enabled")
                 Divider().padding(.leading, 40)
                 ProfileDetailRow(icon: "lock.shield", title: "Role Access", value: "Seer")
                 Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "moon.stars", title: "Appearance", value: "System")
+                AppearancePickerRow(selection: $appAppearance)
+                Divider().padding(.leading, 40)
+                LanguagePickerRow(selection: $appLanguage)
             }
             .padding(.vertical, 4)
             .cardStyle()
         }
+    }
+}
+
+private struct AppearancePickerRow: View {
+    @Binding var selection: AppAppearance
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: selection.icon)
+                    .foregroundStyle(.teal)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Appearance")
+                        .foregroundStyle(.secondary)
+
+                    Text(selection.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Picker("Appearance", selection: $selection) {
+                ForEach(AppAppearance.allCases) { appearance in
+                    Text(appearance.title)
+                        .tag(appearance)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+private struct LanguagePickerRow: View {
+    @Binding var selection: AppLanguage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: "globe.asia.australia.fill")
+                    .foregroundStyle(.teal)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(selection.languageRowTitle)
+                        .foregroundStyle(.secondary)
+
+                    Text(selection.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Picker(selection.languageRowTitle, selection: $selection) {
+                ForEach(AppLanguage.allCases) { language in
+                    Text(language.title)
+                        .tag(language)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+private struct ProfileLogoutButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: .destructive, action: action) {
+            Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .padding(.top, 4)
     }
 }
 
@@ -3189,6 +4374,7 @@ private struct ProfileEditorView: View {
     @State private var email: String
     @State private var phone: String
     @State private var location: String
+    @State private var avatarStyle: ProfileAvatarStyle
 
     private var canSave: Bool {
         !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -3200,7 +4386,8 @@ private struct ProfileEditorView: View {
             role: role,
             email: email,
             phone: phone,
-            location: location
+            location: location,
+            avatarStyle: avatarStyle
         )
     }
 
@@ -3211,6 +4398,7 @@ private struct ProfileEditorView: View {
         _email = State(initialValue: profile.email)
         _phone = State(initialValue: profile.phone)
         _location = State(initialValue: profile.location)
+        _avatarStyle = State(initialValue: profile.avatarStyle)
     }
 
     var body: some View {
@@ -3220,12 +4408,14 @@ private struct ProfileEditorView: View {
                     Spacer()
                     ProfilePhotoView(
                         profile: draftProfile,
-                        size: 100,
+                        size: 120,
                         showsCameraBadge: true
                     )
                     Spacer()
                 }
                 .padding(.vertical, 8)
+
+                AvatarStylePicker(selection: $avatarStyle)
             }
 
             Section("Personal") {
@@ -3269,6 +4459,76 @@ private struct ProfileEditorView: View {
     }
 }
 
+private struct AvatarStylePicker: View {
+    @Binding var selection: ProfileAvatarStyle
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(ProfileAvatarStyle.allCases) { style in
+                Button {
+                    selection = style
+                } label: {
+                    AvatarStyleOptionCard(
+                        style: style,
+                        isSelected: selection == style
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct AvatarStyleOptionCard: View {
+    let style: ProfileAvatarStyle
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: style.colors,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                Image(systemName: style.icon)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 34, height: 34)
+
+            Text(style.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.teal)
+            }
+        }
+        .padding(10)
+        .background(AppColors.elevatedSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isSelected ? Color.teal.opacity(0.58) : AppColors.border)
+        }
+    }
+}
+
 private struct ProfileDetailRow: View {
     let icon: String
     let title: String
@@ -3307,13 +4567,13 @@ private struct ProfilePhotoView: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: [.teal, .blue, .indigo],
+                            colors: profile.avatarStyle.colors,
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
 
-                Image(systemName: "person.fill")
+                Image(systemName: profile.avatarStyle.icon)
                     .font(.system(size: size * 0.42, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
 

@@ -5,6 +5,8 @@ enum HoroDataError: Error, Equatable, LocalizedError {
     case notFound(String)
     case invalidInput(String)
     case notConfigured(String)
+    case server(String)
+    case decoding(String)
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +17,10 @@ enum HoroDataError: Error, Equatable, LocalizedError {
         case .invalidInput(let message):
             return message
         case .notConfigured(let message):
+            return message
+        case .server(let message):
+            return message
+        case .decoding(let message):
             return message
         }
     }
