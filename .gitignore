@@ -13,3 +13,18 @@ build/
 
 # macOS
 .DS_Store
+
+# ---- เพิ่มสำหรับส่วน backend/Supabase ----
+
+# secrets — ห้าม commit เด็ดขาด
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.mobileprovision
+
+# supabase (state ของ CLI ในเครื่อง ไม่ใช่ของโปรเจกต์)
+supabase/.temp/
+supabase/.branches/
