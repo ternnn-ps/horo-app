@@ -19,7 +19,9 @@ if [[ -z "$ANON_KEY" ]]; then
   ANON_KEY=$(supabase status -o env 2>/dev/null | sed -n 's/^ANON_KEY="\(.*\)"$/\1/p')
 fi
 
-if ! curl -sf -m 3 "$SUPABASE_URL/rest/v1/" -H "apikey: $ANON_KEY" >/dev/null 2>&1; then
+# ข้ามเมื่อ "ต่อไม่ติด" เท่านั้น ไม่ใช่เมื่อ server ตอบ error
+# (cloud ตอบ 401 ที่ root ทำให้ curl -f ล้ม แล้วเทสข้ามตัวเองทั้งชุดโดยไม่มีใครรู้)
+if ! curl -s -m 5 -o /dev/null "$SUPABASE_URL/auth/v1/health"; then
   echo "SKIP: ไม่มี Supabase ที่ $SUPABASE_URL — ข้ามชุดนี้ (ไม่ถือว่าล้มเหลว)"
   exit 0
 fi
@@ -242,9 +244,14 @@ else
     bad "เหรียญออกจาก escrow ของผู้ใช้ครบ" "reserved ${USER_RESERVED_BEFORE}→$USER_RESERVED_AFTER, ราคา $PRICE"
   fi
 
-  LEDGER=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
-    "select count(*) from (select transaction_id from public.ledger_entry group by transaction_id having sum(amount) <> 0) t" 2>/dev/null || echo "?")
-  [[ "$LEDGER" == "0" ]] && ok "ledger สมดุลทุกธุรกรรม" || bad "ledger สมดุลทุกธุรกรรม" "พบ $LEDGER รายการไม่สมดุล"
+  # ตรวจ ledger ต้องเข้าฐานตรง ๆ (ตาราง deny-all ไม่มีทางอ่านผ่าน API) — ทำได้เฉพาะ local
+  if [[ "$SUPABASE_URL" == *"127.0.0.1"* || "$SUPABASE_URL" == *"localhost"* ]]; then
+    LEDGER=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select count(*) from (select transaction_id from public.ledger_entry group by transaction_id having sum(amount) <> 0) t" 2>/dev/null || echo "?")
+    [[ "$LEDGER" == "0" ]] && ok "ledger สมดุลทุกธุรกรรม" || bad "ledger สมดุลทุกธุรกรรม" "พบ $LEDGER รายการไม่สมดุล"
+  else
+    echo "  ⏭  ข้ามการตรวจ ledger (ต่อ psql เข้า remote ตรง ๆ ไม่ได้)"
+  fi
 fi
 
 echo
