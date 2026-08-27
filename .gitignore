@@ -28,3 +28,4 @@ build/
 # supabase (state ของ CLI ในเครื่อง ไม่ใช่ของโปรเจกต์)
 supabase/.temp/
 supabase/.branches/
+supabase/functions/.env*

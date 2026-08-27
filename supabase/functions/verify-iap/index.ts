@@ -2,34 +2,32 @@
 // verify-iap — ตรวจใบเสร็จ In-App Purchase แล้วเติมเหรียญเข้ากระเป๋า
 //
 // ทำไมต้องเป็น Edge Function ไม่ใช่ RPC ในฐานข้อมูล:
-//   1) ต้องถือ secret (Apple key) ซึ่งห้ามอยู่ในฐานข้อมูล
+//   1) ต้องถือ secret และปักหมุด certificate ของ Apple
 //   2) ต้องยิง HTTP ออกไปหา Apple ซึ่ง Postgres ไม่ควรทำ
 //
-// สามโหมด อ่านจาก app_config key `payment.iap_mode`:
-//   local_test  — StoreKit Testing ใน Xcode: ตรวจโครงสร้าง ไม่ตรวจลายเซ็น
-//                 **ใช้พัฒนาเท่านั้น ไม่ต้องมีบัญชี Apple Developer**
-//   sandbox     — Apple sandbox (ต้องมีบัญชี $99)
-//   production  — ของจริง
+// การตรวจลายเซ็นอยู่ใน ../_shared/apple-jws.ts
+// (เคยลองใช้ @apple/app-store-server-library แล้วแต่รันบน Deno ไม่ได้ — เหตุผลอยู่ในไฟล์นั้น)
 //
-// ⚠️⚠️ ก่อนสลับเป็น sandbox/production ต้องทำ checklist ท้ายไฟล์ให้ครบ
-//      เส้นทาง verify ลายเซ็นในไฟล์นี้ยังไม่เคยรันกับข้อมูลจริงจาก Apple
-//      เพราะยังไม่ได้ซื้อ Developer Program — ห้ามเชื่อว่าใช้ได้จนกว่าจะทดสอบ
+// โหมดอ่านจาก app_config key `payment.iap_mode`:
+//   local_test  — StoreKit Testing ใน Xcode (ยังไม่มีบัญชี Apple Developer)
+//                 **ต้องตั้ง env ALLOW_UNVERIFIED_IAP=true ด้วย ไม่งั้นปฏิเสธ**
+//                 สองชั้นนี้ทำให้ deploy ขึ้น cloud แล้วไม่กลายเป็นแจกเหรียญฟรี
+//   sandbox     — Apple sandbox: ตรวจลายเซ็นเต็มรูปแบบ
+//   production  — ของจริง: ตรวจลายเซ็นเต็มรูปแบบ + ต้องมี APPLE_APP_APPLE_ID
 // =============================================================================
 
 import { createClient } from 'jsr:@supabase/supabase-js@2'
-import * as jose from 'https://deno.land/x/jose@v5.9.6/index.ts'
+import { APPLE_ROOT_CAS } from '../_shared/apple-root-cas.ts'
+import { verifyAppleJws } from '../_shared/apple-jws.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
 
-// bundle id ของแอป — ต้องตรงกับที่ตั้งใน Xcode ไม่งั้นใบเสร็จจากแอปอื่นจะใช้ได้
-const EXPECTED_BUNDLE_ID = Deno.env.get('APPLE_BUNDLE_ID') ?? ''
-
-// ลายนิ้วมือ (SHA-256) ของ Apple Root CA G3 — ใช้ปักหมุดปลายทางของ certificate chain
-// ที่มา: https://www.apple.com/certificateauthority/  (AppleRootCA-G3.cer)
-const APPLE_ROOT_G3_SHA256 =
-  'invalid-until-verified-with-real-data'
+const APPLE_BUNDLE_ID = Deno.env.get('APPLE_BUNDLE_ID') ?? ''
+const APPLE_APP_APPLE_ID = Deno.env.get('APPLE_APP_APPLE_ID') ?? ''
+// สวิตช์ชั้นที่สองของโหมด local_test — ต้องตั้งเองในเครื่องพัฒนาเท่านั้น
+const ALLOW_UNVERIFIED = Deno.env.get('ALLOW_UNVERIFIED_IAP') === 'true'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -49,52 +47,12 @@ async function sha256Hex(input: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** decode payload ของ JWS โดยยังไม่ตรวจลายเซ็น (ใช้ได้ทุกโหมด) */
-function decodeJwsPayload(jws: string): Record<string, unknown> {
+/** อ่าน payload ของ JWS โดยไม่ตรวจลายเซ็น — ใช้เฉพาะโหมด local_test เท่านั้น */
+function decodeJwsPayloadUnsafe(jws: string): Record<string, unknown> {
   const parts = jws.split('.')
   if (parts.length !== 3) throw new Error('malformed_jws')
   const pad = (s: string) => s + '='.repeat((4 - (s.length % 4)) % 4)
-  const raw = atob(pad(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
-  return JSON.parse(raw)
-}
-
-/**
- * ตรวจลายเซ็นของ signed transaction จาก Apple
- *
- * Apple เซ็น JWS ด้วย certificate chain ใน header `x5c`
- * ขั้นตอนที่ถูกต้องคือ:
- *   1) เอา leaf cert (x5c[0]) มาดึง public key แล้วตรวจลายเซ็นของ JWS
- *   2) ไล่ตรวจว่า chain ต่อกันจริงจนถึง Apple Root CA G3
- *   3) เทียบ root กับค่าที่ปักหมุดไว้ (ห้ามเชื่อ root ที่มากับ payload เฉย ๆ)
- *
- * ⚠️ ตอนนี้ทำครบแค่ข้อ 1 — ข้อ 2/3 ยังไม่ได้ทำเพราะยังไม่มีข้อมูลจริงมาทดสอบ
- *    จึงตั้งใจให้ throw เมื่อถูกเรียกในโหมด sandbox/production
- *    ดีกว่าปล่อยให้ผ่านแบบครึ่ง ๆ กลาง ๆ แล้วเข้าใจผิดว่าปลอดภัยแล้ว
- */
-async function verifyAppleSignature(jws: string): Promise<Record<string, unknown>> {
-  const header = JSON.parse(
-    atob(jws.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')),
-  ) as { x5c?: string[]; alg?: string }
-
-  if (!header.x5c || header.x5c.length < 3) throw new Error('missing_cert_chain')
-
-  if (APPLE_ROOT_G3_SHA256 === 'invalid-until-verified-with-real-data') {
-    throw new Error(
-      'apple_chain_verification_not_configured: ' +
-        'ต้องใส่ลายนิ้วมือ Apple Root CA G3 และทดสอบกับใบเสร็จจริงก่อนใช้โหมดนี้',
-    )
-  }
-
-  const leafDer = Uint8Array.from(atob(header.x5c[0]), (c) => c.charCodeAt(0))
-  const key = await crypto.subtle.importKey(
-    'spki',
-    leafDer,
-    { name: 'ECDSA', namedCurve: 'P-256' },
-    false,
-    ['verify'],
-  )
-  const { payload } = await jose.compactVerify(jws, key)
-  return JSON.parse(new TextDecoder().decode(payload))
+  return JSON.parse(atob(pad(parts[1].replace(/-/g, '+').replace(/_/g, '/'))))
 }
 
 Deno.serve(async (req) => {
@@ -104,7 +62,6 @@ Deno.serve(async (req) => {
   const authHeader = req.headers.get('Authorization') ?? ''
   if (!authHeader) return json({ error: 'not_authenticated' }, 401)
 
-  // ---- ใครเป็นคนเรียก ----
   const asCaller = createClient(SUPABASE_URL, ANON_KEY, {
     global: { headers: { Authorization: authHeader } },
   })
@@ -112,58 +69,66 @@ Deno.serve(async (req) => {
   if (userErr || !userData?.user) return json({ error: 'not_authenticated' }, 401)
   const accountId = userData.user.id
 
-  // ---- input ----
   let body: { jws?: string; productId?: string; transactionId?: string }
   try {
     body = await req.json()
   } catch {
     return json({ error: 'invalid_json' }, 400)
   }
-  if (!body.jws && !body.productId) return json({ error: 'missing_receipt' }, 400)
 
-  // ---- โหมดปัจจุบัน (อ่านด้วย service role เพราะ app_config ตัวนี้ไม่ public) ----
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
   const { data: cfg, error: cfgErr } = await admin
     .from('app_config').select('value').eq('key', 'payment.iap_mode').single()
   if (cfgErr) return json({ error: 'config_unavailable' }, 500)
   const mode = String(cfg.value).replaceAll('"', '')
 
-  // ---- ตรวจใบเสร็จตามโหมด ----
+  // ---- ตรวจใบเสร็จ ----
   let claims: Record<string, unknown>
   try {
     if (mode === 'local_test') {
-      // StoreKit Testing เซ็นด้วย cert ทดสอบในเครื่อง ตรวจ chain ของ Apple ไม่ได้อยู่แล้ว
-      // จึงอ่าน payload ตรง ๆ — ปลอดภัยเพราะโหมดนี้ใช้เฉพาะตอนพัฒนา
+      // ชั้นที่สอง: ต่อให้ config เป็น local_test ถ้า env ไม่อนุญาตก็ไม่ผ่าน
+      // ทำให้ deploy ขึ้น cloud โดยไม่ตั้ง env นี้ = ปลอดภัยเสมอ
+      if (!ALLOW_UNVERIFIED) {
+        return json({
+          error: 'unverified_mode_not_allowed',
+          detail: 'payment.iap_mode=local_test แต่ ALLOW_UNVERIFIED_IAP ไม่ได้ตั้งเป็น true',
+        }, 403)
+      }
       claims = body.jws
-        ? decodeJwsPayload(body.jws)
-        : { productId: body.productId, transactionId: body.transactionId ?? crypto.randomUUID() }
+        ? decodeJwsPayloadUnsafe(body.jws)
+        : {
+            productId: body.productId,
+            transactionId: body.transactionId ?? crypto.randomUUID(),
+          }
     } else if (mode === 'sandbox' || mode === 'production') {
       if (!body.jws) return json({ error: 'missing_jws' }, 400)
-      claims = await verifyAppleSignature(body.jws)
-
-      if (EXPECTED_BUNDLE_ID && claims.bundleId !== EXPECTED_BUNDLE_ID) {
-        return json({ error: 'bundle_mismatch' }, 400)
+      if (!APPLE_BUNDLE_ID) {
+        throw new Error('APPLE_BUNDLE_ID ไม่ได้ตั้ง — ไม่มีทางรู้ว่าใบเสร็จมาจากแอปเราจริงไหม')
       }
-      const env = String(claims.environment ?? '').toLowerCase()
-      const wantSandbox = mode === 'sandbox'
-      if ((env === 'sandbox') !== wantSandbox) {
-        return json({ error: 'environment_mismatch', detail: { env, mode } }, 400)
+      if (mode === 'production' && !APPLE_APP_APPLE_ID) {
+        throw new Error('APPLE_APP_APPLE_ID ไม่ได้ตั้ง — จำเป็นสำหรับ production')
       }
+      claims = await verifyAppleJws(body.jws, APPLE_ROOT_CAS, {
+        expectedBundleId: APPLE_BUNDLE_ID,
+        expectedEnvironment: mode === 'production' ? 'Production' : 'Sandbox',
+      }) as Record<string, unknown>
     } else {
       return json({ error: 'unknown_iap_mode', detail: mode }, 500)
     }
   } catch (e) {
-    return json({ error: 'receipt_verification_failed', detail: String(e) }, 400)
+    // ไม่ส่งรายละเอียดภายในกลับไปให้ client มากเกินจำเป็น แต่ log ไว้ดูเอง
+    const reason = e instanceof Error ? e.message : String(e)
+    console.error('[verify-iap] verification failed:', reason)
+    return json({ error: 'receipt_verification_failed', detail: reason.slice(0, 300) }, 400)
   }
 
   const productId = String(claims.productId ?? body.productId ?? '')
   const transactionId = String(claims.transactionId ?? body.transactionId ?? '')
   if (!productId || !transactionId) return json({ error: 'incomplete_receipt' }, 400)
 
-  // hash ของใบเสร็จ — เก็บ hash ไม่เก็บตัวใบเสร็จดิบ (เป็นตัวกัน replay ในฐานข้อมูล)
+  // เก็บ hash ไม่เก็บใบเสร็จดิบ — ตัวกัน replay อยู่ที่ unique constraint ในฐานข้อมูล
   const tokenHashHex = await sha256Hex(body.jws ?? `${accountId}:${transactionId}`)
 
-  // ---- เติมเหรียญ (สร้าง order + credit ใน transaction เดียว idempotent) ----
   const { data, error } = await admin.rpc('internal_credit_iap', {
     p_account_id: accountId,
     p_provider: 'apple_iap',
@@ -174,7 +139,6 @@ Deno.serve(async (req) => {
   })
 
   if (error) {
-    // unknown_product / product ไม่ตรงแพ็ก = ข้อมูลผิด ไม่ใช่ระบบพัง
     const isClientError = /unknown_product|receipt|product/i.test(error.message)
     return json({ error: 'credit_failed', detail: error.message }, isClientError ? 400 : 500)
   }
@@ -183,17 +147,14 @@ Deno.serve(async (req) => {
 })
 
 // =============================================================================
-// ✅ Checklist ก่อนสลับเป็น sandbox/production (ห้ามข้าม)
+// ✅ Checklist ตอนย้ายไป sandbox/production
 //
 // 1. ซื้อ Apple Developer Program แล้วสร้าง In-App Purchase ใน App Store Connect
 //    ให้ product id ตรงกับ coin_package.apple_product_id ทุกตัว
-// 2. ตั้ง env ของ Edge Function: APPLE_BUNDLE_ID = bundle id จริงของแอป
-// 3. ดาวน์โหลด AppleRootCA-G3.cer จาก apple.com/certificateauthority
-//    คำนวณ SHA-256 แล้วใส่ใน APPLE_ROOT_G3_SHA256
-// 4. เติมโค้ดตรวจ certificate chain (ข้อ 2/3 ใน verifyAppleSignature) ให้ครบ
-//    แล้วทดสอบกับใบเสร็จจริงจาก sandbox — ต้องผ่านทั้งเคสถูกและเคสปลอม
-// 5. ทดสอบ: ใบเสร็จซ้ำต้องได้ already_credited และเหรียญไม่เพิ่ม
-// 6. ทดสอบ: ใบเสร็จของแอปอื่น / product id ไม่ตรงแพ็ก ต้องถูกปฏิเสธ
-// 7. ตั้ง app_config payment.iap_mode = 'production'
-//    (ซึ่งจะปิด dev_grant_coins ไปโดยอัตโนมัติ)
+// 2. supabase secrets set APPLE_BUNDLE_ID=<bundle id จริง>
+// 3. (production เท่านั้น) supabase secrets set APPLE_APP_APPLE_ID=<app id ตัวเลข>
+// 4. **ห้ามตั้ง ALLOW_UNVERIFIED_IAP บน cloud เด็ดขาด**
+// 5. update app_config set value='"sandbox"' where key='payment.iap_mode';
+//    ทดสอบซื้อจริงใน sandbox แล้วค่อยเปลี่ยนเป็น production
+// 6. ตรวจว่า dev_grant_coins ปิดตัวเองแล้ว (มันผูกกับ payment.iap_mode)
 // =============================================================================

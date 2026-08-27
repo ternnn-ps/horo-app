@@ -1,69 +1,97 @@
 # Edge Functions
 
-## ⛔ ยังไม่ deploy ขึ้น cloud โดยตั้งใจ — อ่านก่อน
+## รายการ
 
-`verify-iap` ตอนนี้ตั้ง `payment.iap_mode = 'local_test'` ซึ่งแปลว่า
-**มันรับใบเสร็จโดยไม่ตรวจลายเซ็น**
+| function | สถานะ |
+|---|---|
+| `verify-iap` | ตรวจใบเสร็จ IAP แล้วเติมเหรียญ — **ตรวจลายเซ็นจริงแล้ว ทดสอบผ่านแล้ว** |
+| `verify-iap-selftest` | ชุดพิสูจน์ว่าตัวตรวจลายเซ็นทำงานถูก (เปิดเฉพาะตอนพัฒนา) |
+| `push-sender` | ยังไม่เขียน — APNs key ต้องมี Apple Developer Program |
+| `outbox-dispatcher` | **ตั้งใจยังไม่ทำ** — ปลายทางเดียวของมันคือ push ซึ่งยังไม่มี |
 
-ถ้า deploy ขึ้น cloud ตอนนี้ ใครก็ตามที่สมัครบัญชีได้ (ใครก็ได้บนอินเทอร์เน็ต)
-จะยิง `POST /functions/v1/verify-iap` ด้วย product id ของแพ็กที่แพงที่สุด
-แล้วได้เหรียญฟรีไม่จำกัด
+`outbox_event` สะสมไว้เฉย ๆ ไม่มีผลเสีย แจ้งเตือนในแอปใช้ตาราง `notification_inbox`
+ที่แอปอ่านตรงผ่าน RLS อยู่แล้ว
 
-**ใช้แบบ local ระหว่างพัฒนาไปก่อน** — deploy เมื่อสลับเป็นโหมด `production` แล้วเท่านั้น
+## `verify-iap` — สามโหมด
 
-## รันตอนพัฒนา
+อ่านจาก `app_config` key `payment.iap_mode`
+
+| โหมด | ตรวจอะไร | ต้องมี |
+|---|---|---|
+| `local_test` | **ไม่ตรวจลายเซ็น** — ใช้กับ StoreKit Testing ใน Xcode | env `ALLOW_UNVERIFIED_IAP=true` |
+| `sandbox` | ตรวจเต็มรูปแบบ, environment ต้องเป็น Sandbox | `APPLE_BUNDLE_ID` |
+| `production` | ตรวจเต็มรูปแบบ, environment ต้องเป็น Production | `APPLE_BUNDLE_ID`, `APPLE_APP_APPLE_ID` |
+
+### กันเหรียญฟรีสองชั้น
+
+โหมด `local_test` ต้องผ่าน **ทั้ง** config และ env — ถ้า deploy ขึ้น cloud
+โดยไม่ตั้ง `ALLOW_UNVERIFIED_IAP` มันจะตอบ `unverified_mode_not_allowed` (403)
+ทดสอบไว้แล้ว: ยิงขอแพ็ก 730 เหรียญโดยไม่มี env → ปฏิเสธ เหรียญไม่เพิ่ม
+
+**ห้ามตั้ง `ALLOW_UNVERIFIED_IAP` บน cloud เด็ดขาด**
+
+### การตรวจลายเซ็นทำอะไรบ้าง
+
+อยู่ใน `_shared/apple-jws.ts` — เขียนเองด้วย pkijs (แกะ ASN.1) + WebCrypto (ตรวจลายเซ็น)
+เพราะทั้ง `@apple/app-store-server-library` และ `pkijs.CertificateChainValidationEngine`
+รันบน Supabase Edge Runtime ไม่ได้ (เหตุผลละเอียดอยู่หัวไฟล์นั้น)
+
+1. `x5c` ต้องมี leaf + intermediate + root
+2. **root ต้องตรงไบต์ต่อไบต์กับ Apple Root CA G3 ที่ฝังไว้** ← หัวใจ
+3. ทุกข้อต่อ: ลายเซ็นถูก + issuer ตรง subject ของใบแม่ + ยังไม่หมดอายุ
+4. ลายเซ็น JWS ตรงกับ public key ของ leaf
+5. `bundleId` / `environment` ตรงกับที่ระบบตั้ง
+
+## ทดสอบ
 
 ```bash
 supabase start
-supabase functions serve verify-iap
+supabase functions serve --no-verify-jwt --env-file supabase/functions/.env.local &
+./scripts/test-iap-verifier.sh
 ```
 
-จะได้ endpoint ที่ `http://127.0.0.1:54321/functions/v1/verify-iap`
-iOS Simulator เรียก `127.0.0.1` ได้ตรง ๆ (เครื่องจริงต้องใช้ IP ของ Mac ในวง LAN เดียวกัน)
+ยืนยัน 4 ข้อ — **ข้อ A สำคัญที่สุด**:
 
-### ทดสอบด้วย curl
+| | |
+|---|---|
+| A | chain ถูกต้อง + root ตรง → **ยอมรับ** |
+| B | chain เดียวกัน + root ของ Apple → ปฏิเสธ (`untrusted_root`) |
+| C | payload ถูกแก้หลังเซ็น → ปฏิเสธ (`bad_signature`) |
+| D | Apple Root CA G3 ที่ฝังไว้ verify ตัวเองผ่าน (ยืนยันว่ารองรับ P-384) |
 
-```bash
-ANON=<anon key จาก supabase start>
-TOKEN=<access_token จากการ login>
+> ถ้าทดสอบแต่ข้อ B/C จะไม่มีทางรู้ว่าโค้ดพัง — **โค้ดที่พังก็ปฏิเสธทุกอย่างเหมือนกัน**
+> เจอมาแล้วสองรอบ ทั้ง library ของ Apple เองและ pkijs engine
 
-curl -X POST 'http://127.0.0.1:54321/functions/v1/verify-iap' \
-  -H "Authorization: Bearer $TOKEN" -H "apikey: $ANON" \
-  -H 'Content-Type: application/json' \
-  -d '{"productId":"app.chata.coin150","transactionId":"local-txn-0001"}'
-```
-
-ยิงซ้ำด้วย `transactionId` เดิมต้องได้ `already_credited: true` และเหรียญไม่เพิ่ม
-
-### เติมเหรียญเร็ว ๆ โดยไม่ผ่าน IAP
-
-รันใน Supabase Studio (SQL Editor) หรือ psql:
+### เติมเหรียญเร็ว ๆ ตอนทำ UI
 
 ```sql
-select dev_grant_coins('<account_id>', 1000, 'ทดสอบหน้าจอซื้อคำถาม');
+select dev_grant_coins('<account_id>', 1000, 'ทดสอบหน้าซื้อคำถาม');
 ```
 
-ทำงานเฉพาะตอน `payment.iap_mode = 'local_test'` — พอสลับเป็น `production`
-มันจะปิดตัวเองอัตโนมัติ (ทดสอบไว้แล้วใน `db/tests/iap-credit.test.sql`)
+ทำงานเฉพาะตอน `payment.iap_mode = 'local_test'` — สลับเป็น production แล้วปิดตัวเอง
 
-## รายการ function
-
-| function | สถานะ | ติดอะไร |
-|---|---|---|
-| `verify-iap` | ใช้ได้ในโหมด `local_test`; เส้นทาง `sandbox`/`production` เขียนไว้แล้วแต่ **ยังไม่เคยทดสอบ** | ต้องมี Apple Developer Program ($99) + ทำ checklist ท้ายไฟล์ `verify-iap/index.ts` ให้ครบ |
-| `push-sender` | ยังไม่เขียน | APNs key ต้องมี $99 |
-| `outbox-dispatcher` | ยังไม่เขียน — **ตั้งใจไม่ทำตอนนี้** เพราะปลายทางเดียวของมันคือ push ซึ่งยังไม่มี | รอ push |
-
-`outbox_event` สะสมไว้เฉย ๆ ไม่มีผลอะไร แจ้งเตือนในแอปใช้ตาราง `notification_inbox`
-ที่แอปอ่านตรงผ่าน RLS อยู่แล้ว
-
-## ตอน deploy จริง (หลังมี $99)
+## ตอนขึ้นจริง (หลังมี Apple Developer Program)
 
 ```bash
 supabase secrets set APPLE_BUNDLE_ID=com.yourcompany.chata
+supabase secrets set APPLE_APP_APPLE_ID=<app id ตัวเลขจาก App Store Connect>
 supabase functions deploy verify-iap
-# แล้วค่อยสลับโหมดใน Studio:
-# update app_config set value = '"production"' where key = 'payment.iap_mode';
+# ห้าม deploy verify-iap-selftest ขึ้น production
 ```
 
-สลับโหมดเป็นขั้นตอน**สุดท้าย** — ทำก่อน deploy จะทำให้แอปที่ยังใช้ StoreKit local ซื้อไม่ได้
+แล้วค่อยสลับโหมด (ทำเป็นขั้นตอน**สุดท้าย** — สลับก่อน deploy จะทำให้แอปที่ยังใช้
+StoreKit local ซื้อไม่ได้):
+
+```sql
+update app_config set value = '"sandbox"' where key = 'payment.iap_mode';
+-- ทดสอบซื้อจริงใน sandbox ให้ผ่านก่อน แล้วค่อย:
+update app_config set value = '"production"' where key = 'payment.iap_mode';
+```
+
+### ยังเหลือให้ทำก่อน production
+
+- ยังไม่ได้ตรวจกับใบเสร็จจริงจาก Apple sandbox (ต้องมีบัญชีก่อน) —
+  กลไกทดสอบครบแล้วแต่ **ข้อมูลจริงยังไม่เคยผ่านเส้นทางนี้**
+- ยังไม่ได้ตรวจ OCSP/CRL ว่า certificate ถูกเพิกถอนหรือยัง
+  (Apple หมุน intermediate ไม่บ่อย ความเสี่ยงต่ำ แต่ควรเพิ่มเมื่อมีเวลา)
+- `originalTransactionId` ยังไม่ได้ใช้ — จำเป็นตอนทำ subscription ไม่ใช่ consumable
