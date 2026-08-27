@@ -197,22 +197,51 @@ struct SupabaseQuestionMessage: Decodable, Equatable, Identifiable {
     }
 }
 
+/// คำถามที่กำลังร่าง พร้อม idempotency key ที่ต้องคงค่าเดิมตลอดอายุของ draft
+///
+/// `submit_question` กันการหักเหรียญซ้ำด้วย `client_request_id` — ถ้าส่ง key เดิมมันจะคืน
+/// `replayed: true` โดยไม่แตะกระเป๋าเงิน แต่กลไกนี้ใช้ไม่ได้เลยถ้า client สุ่ม key ใหม่ตอน retry
+/// จึงไม่มี default UUID ใน init: ต้องสร้างผ่าน `startDraft` ครั้งเดียวตอนเริ่มร่าง
+/// แล้วส่งตัวเดิมซ้ำจนกว่าจะสำเร็จหรือผู้ใช้ทิ้ง draft
 struct SupabaseQuestionDraft: Equatable {
     let seerServiceID: UUID
     let firstMessage: String
     let clientMessageID: UUID
     let clientRequestID: UUID
 
-    init(
+    static func startDraft(seerServiceID: UUID, firstMessage: String) -> SupabaseQuestionDraft {
+        SupabaseQuestionDraft(
+            seerServiceID: seerServiceID,
+            firstMessage: firstMessage,
+            clientMessageID: UUID(),
+            clientRequestID: UUID()
+        )
+    }
+
+    /// แก้ข้อความได้โดยคง key เดิม — ยังเป็นคำถามเดียวกันที่ยังส่งไม่สำเร็จ
+    func replacingMessage(_ text: String) -> SupabaseQuestionDraft {
+        SupabaseQuestionDraft(
+            seerServiceID: seerServiceID,
+            firstMessage: text,
+            clientMessageID: clientMessageID,
+            clientRequestID: clientRequestID
+        )
+    }
+}
+
+/// กติกาเดียวของการเลือก idempotency key ตอนซื้อคำถาม — แยกออกมาเพื่อให้เทสได้
+///
+/// บั๊กที่กันอยู่: ผู้ใช้กดส่ง เน็ตหลุด กดใหม่ ถ้าได้ key ใหม่ = ซื้อสองครั้ง หักเหรียญสองรอบ
+enum QuestionDraftPolicy {
+    static func draft(
+        reusing pending: SupabaseQuestionDraft?,
         seerServiceID: UUID,
-        firstMessage: String,
-        clientMessageID: UUID = UUID(),
-        clientRequestID: UUID = UUID()
-    ) {
-        self.seerServiceID = seerServiceID
-        self.firstMessage = firstMessage
-        self.clientMessageID = clientMessageID
-        self.clientRequestID = clientRequestID
+        message: String
+    ) -> SupabaseQuestionDraft {
+        if let pending, pending.seerServiceID == seerServiceID {
+            return pending.replacingMessage(message)
+        }
+        return .startDraft(seerServiceID: seerServiceID, firstMessage: message)
     }
 }
 
@@ -234,49 +263,36 @@ struct SupabaseSubmittedQuestion: Decodable, Equatable {
 
 final class SupabaseHoroDataService: HoroDataServicing {
     let configuration: SupabaseConfiguration
+    let auth: ChataAuth
 
-    private var session: SupabaseAuthSession?
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
 
     init(configuration: SupabaseConfiguration) {
         self.configuration = configuration
+        self.auth = ChataAuth(configuration: configuration)
     }
 
     var isSignedIn: Bool {
-        session != nil
+        auth.isSignedIn
     }
 
     var signedInUserID: UUID? {
-        session?.userID
+        auth.currentUserID
     }
 
-    func signIn(email: String, password: String) async throws -> SupabaseAuthSession {
-        let body = [
-            "email": email,
-            "password": password
-        ]
+    @discardableResult
+    func signIn(email: String, password: String) async throws -> UUID {
+        try await auth.signIn(email: email, password: password)
+    }
 
-        let response: AuthTokenResponse = try await request(
-            path: "auth/v1/token",
-            queryItems: [URLQueryItem(name: "grant_type", value: "password")],
-            method: "POST",
-            body: body,
-            requiresSession: false
-        )
+    @discardableResult
+    func signUp(email: String, password: String) async throws -> UUID {
+        try await auth.signUp(email: email, password: password)
+    }
 
-        guard let userID = UUID(uuidString: response.user.id) else {
-            throw HoroDataError.decoding("Supabase auth returned an invalid user id.")
-        }
-
-        let session = SupabaseAuthSession(
-            userID: userID,
-            email: response.user.email ?? email,
-            accessToken: response.accessToken,
-            refreshToken: response.refreshToken
-        )
-        self.session = session
-        return session
+    func signOut() async throws {
+        try await auth.signOut()
     }
 
     func fetchAccount() async throws -> SupabaseAccount {
@@ -444,27 +460,27 @@ final class SupabaseHoroDataService: HoroDataServicing {
 
     func signInMock(as role: HoroUserRole) async throws -> HoroUser {
         let email = role == .seer ? "seer@horo.test" : "customer@horo.test"
-        let session = try await signIn(email: email, password: configuration.testPassword)
+        let userID = try await signIn(email: email, password: configuration.testPassword)
         let account = try await fetchAccount()
 
         return HoroUser(
-            id: session.userID,
+            id: userID,
             role: account.role.appRole,
-            displayName: session.email,
-            email: session.email
+            displayName: email,
+            email: email
         )
     }
 
     func currentUser() async -> HoroUser? {
-        guard let session else {
+        guard let userID = auth.currentUserID else {
             return nil
         }
 
         return HoroUser(
-            id: session.userID,
+            id: userID,
             role: .customer,
-            displayName: session.email,
-            email: session.email
+            displayName: "",
+            email: ""
         )
     }
 
@@ -606,7 +622,8 @@ final class SupabaseHoroDataService: HoroDataServicing {
         var request = URLRequest(url: url(path: path, queryItems: queryItems))
         request.httpMethod = method
         request.setValue(configuration.anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(requiresSession ? try accessToken() : configuration.anonKey)", forHTTPHeaderField: "Authorization")
+        let bearer = requiresSession ? try await auth.accessToken() : configuration.anonKey
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         for (key, value) in headers {
@@ -641,14 +658,6 @@ final class SupabaseHoroDataService: HoroDataServicing {
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
         components?.queryItems = queryItems.isEmpty ? nil : queryItems
         return components?.url ?? endpoint
-    }
-
-    private func accessToken() throws -> String {
-        guard let accessToken = session?.accessToken else {
-            throw HoroDataError.unauthenticated
-        }
-
-        return accessToken
     }
 
     private func decodeSupabaseError(from data: Data, statusCode: Int) -> HoroDataError {

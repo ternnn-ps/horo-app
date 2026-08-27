@@ -2074,10 +2074,10 @@ private final class SupabaseAppViewModel: ObservableObject {
         let resolvedPassword = cleanPassword.isEmpty ? service.configuration.testPassword : cleanPassword
 
         do {
-            let session = try await service.signIn(email: testAccount.email, password: resolvedPassword)
+            let userID = try await service.signIn(email: testAccount.email, password: resolvedPassword)
             let account = try await service.fetchAccount()
 
-            signedInAccountID = session.userID
+            signedInAccountID = userID
             signedInRole = testAccount.role
             isConnected = true
             statusMessage = "Supabase connected as \(account.role.rawValue)."
@@ -2095,6 +2095,9 @@ private final class SupabaseAppViewModel: ObservableObject {
         }
     }
 
+    /// คำถามที่ส่งไม่สำเร็จและยังรอ retry — เก็บไว้เพื่อคง idempotency key เดิม
+    private var pendingQuestionDraft: SupabaseQuestionDraft?
+
     func startQuestion(with seer: CustomerSeer, firstMessage: String, chatStore: TestChatViewModel) async -> Bool {
         guard let service, isConnected else {
             statusMessage = "Supabase is not connected. Created a local test chat instead."
@@ -2106,14 +2109,20 @@ private final class SupabaseAppViewModel: ObservableObject {
             return false
         }
 
+        // ใช้ draft เดิมถ้าคำถามนี้เคยส่งแล้วไม่สำเร็จ — key เดิมทำให้ยิงซ้ำไม่หักเหรียญรอบสอง
+        let draft = QuestionDraftPolicy.draft(
+            reusing: pendingQuestionDraft,
+            seerServiceID: serviceID,
+            message: firstMessage
+        )
+        pendingQuestionDraft = draft
+
         do {
-            _ = try await service.submitQuestion(
-                SupabaseQuestionDraft(
-                    seerServiceID: serviceID,
-                    firstMessage: firstMessage
-                )
-            )
-            statusMessage = "Question submitted to Supabase."
+            let submitted = try await service.submitQuestion(draft)
+            pendingQuestionDraft = nil
+            statusMessage = submitted.replayed
+                ? "คำถามนี้ส่งไปแล้ว ไม่ได้หักเหรียญซ้ำ"
+                : "Question submitted to Supabase."
             await refreshWallet()
             await refreshConversations(chatStore: chatStore)
             return true

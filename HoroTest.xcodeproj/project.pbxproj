@@ -17,6 +17,10 @@
 		1A0000010000000000000008 /* HoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001C /* HoroDataService.swift */; };
 		1A0000010000000000000009 /* MockHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001D /* MockHoroDataService.swift */; };
 		1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001E /* SupabaseHoroDataService.swift */; };
+		1A00000100000000000000A1 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 1A00000100000000000000B1 /* Auth */; };
+		1A00000100000000000000A2 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 1A00000100000000000000B2 /* Realtime */; };
+		1A00000100000000000000E1 /* QuestionDraftPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */; };
+		1A00000100000000000000D1 /* ChataAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000D2 /* ChataAuth.swift */; };
 		1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001F /* HoroDataServiceTests.swift */; };
 		1A00000100000000000000A1 /* SupabaseConfig.plist in Resources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000A0 /* SupabaseConfig.plist */; };
 /* End PBXBuildFile section */
@@ -44,7 +48,9 @@
 		1A000001000000000000001C /* HoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataService.swift; sourceTree = "<group>"; };
 		1A000001000000000000001D /* MockHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHoroDataService.swift; sourceTree = "<group>"; };
 		1A000001000000000000001E /* SupabaseHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseHoroDataService.swift; sourceTree = "<group>"; };
+		1A00000100000000000000D2 /* ChataAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChataAuth.swift; sourceTree = "<group>"; };
 		1A000001000000000000001F /* HoroDataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataServiceTests.swift; sourceTree = "<group>"; };
+		1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionDraftPolicyTests.swift; sourceTree = "<group>"; };
 		1A00000100000000000000A0 /* SupabaseConfig.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = SupabaseConfig.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -53,6 +59,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1A00000100000000000000A1 /* Auth in Frameworks */,
+				1A00000100000000000000A2 /* Realtime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -95,6 +103,7 @@
 			children = (
 				1A0000010000000000000015 /* RecordListViewModelTests.swift */,
 				1A000001000000000000001F /* HoroDataServiceTests.swift */,
+				1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */,
 			);
 			path = HoroTestTests;
 			sourceTree = "<group>";
@@ -113,6 +122,7 @@
 				1A000001000000000000001C /* HoroDataService.swift */,
 				1A000001000000000000001D /* MockHoroDataService.swift */,
 				1A000001000000000000001E /* SupabaseHoroDataService.swift */,
+				1A00000100000000000000D2 /* ChataAuth.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -142,6 +152,10 @@
 			dependencies = (
 			);
 			name = HoroTest;
+			packageProductDependencies = (
+				1A00000100000000000000B1 /* Auth */,
+				1A00000100000000000000B2 /* Realtime */,
+			);
 			productName = HoroTest;
 			productReference = 1A0000010000000000000016 /* HoroTest.app */;
 			productType = "com.apple.product-type.application";
@@ -192,6 +206,9 @@
 				Base,
 			);
 			mainGroup = 1A0000010000000000000060;
+			packageReferences = (
+				1A00000100000000000000C1 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+			);
 			productRefGroup = 1A0000010000000000000063 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -232,6 +249,7 @@
 				1A0000010000000000000008 /* HoroDataService.swift in Sources */,
 				1A0000010000000000000009 /* MockHoroDataService.swift in Sources */,
 				1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */,
+				1A00000100000000000000D1 /* ChataAuth.swift in Sources */,
 				1A0000010000000000000003 /* RecordListViewModel.swift in Sources */,
 				1A0000010000000000000006 /* UserProfileViewModel.swift in Sources */,
 			);
@@ -243,6 +261,7 @@
 			files = (
 				1A0000010000000000000005 /* RecordListViewModelTests.swift in Sources */,
 				1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */,
+				1A00000100000000000000E1 /* QuestionDraftPolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -529,6 +548,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1A00000100000000000000C1 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.55.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1A00000100000000000000B1 /* Auth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A00000100000000000000C1 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Auth;
+		};
+		1A00000100000000000000B2 /* Realtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1A00000100000000000000C1 /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Realtime;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 1A0000010000000000000030 /* Project object */;
 }
