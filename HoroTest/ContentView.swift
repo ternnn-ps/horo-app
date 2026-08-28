@@ -268,6 +268,7 @@ private struct CustomerWorkspaceView: View {
                 CustomerProfileSpaceView(
                     appAppearance: $appAppearance,
                     appLanguage: $appLanguage,
+                    supabaseApp: supabaseApp,
                     testAccount: testAccount,
                     coinBalance: $coinBalance,
                     onLogout: onLogout
@@ -2166,6 +2167,9 @@ private final class SupabaseAppViewModel: ObservableObject {
     @Published private(set) var walletPayableCoin: Int?
     @Published private(set) var seers: [CustomerSeer] = []
     @Published private(set) var coinPackages: [WalletTopUpOption] = []
+    /// เซิร์ฟเวอร์อนุญาตให้เติมเหรียญแบบ dev ไหม — **แอปไม่เดาเอง** เพราะเงื่อนไขอยู่สองที่
+    /// ที่ client มองไม่เห็นทั้งคู่ (ดู `SupabaseDevTopUpAvailability`)
+    @Published private(set) var isDevTopUpAvailable = false
     /// สถานะล่าสุดของคำถามแต่ละใบ (submitted / active / close_requested / completed / cancelled_refunded)
     @Published private(set) var questionStatuses: [UUID: String] = [:]
 
@@ -2214,6 +2218,7 @@ private final class SupabaseAppViewModel: ObservableObject {
             await refreshWallet()
             await refreshSeers()
             await refreshCoinPackages()
+            await refreshDevTopUpAvailability()
             await refreshConversations(chatStore: chatStore)
             await startRealtime()
 
@@ -2333,15 +2338,53 @@ private final class SupabaseAppViewModel: ObservableObject {
             coinPackages = packages.map { package in
                 WalletTopUpOption(
                     id: package.code,
-                    coins: package.coinAmount + package.bonusCoin,
+                    coins: package.totalCoin,
                     priceLabel: "\(package.currency) \(package.priceMinor / 100)",
                     subtitle: package.allowedMethods.isEmpty
                         ? "Supabase coin package"
-                        : "Accepts \(package.allowedMethods.joined(separator: ", "))"
+                        : "Accepts \(package.allowedMethods.joined(separator: ", "))",
+                    appleProductID: package.appleProductID
                 )
             }
         } catch {
             coinPackages = []
+        }
+    }
+
+    /// ถามเซิร์ฟเวอร์ว่าเปิดให้เติมแบบ dev ไหม — ถามไม่ได้ให้ถือว่าไม่เปิด
+    /// (ปุ่มไม่โผล่ ดีกว่าโผล่แล้วกดไม่ได้)
+    func refreshDevTopUpAvailability() async {
+        guard let service else {
+            isDevTopUpAvailable = false
+            return
+        }
+
+        do {
+            isDevTopUpAvailable = try await service.fetchDevTopUpAvailability().isAllowed
+        } catch {
+            isDevTopUpAvailable = false
+        }
+    }
+
+    /// เติมเหรียญแบบ dev แล้ว**อ่านยอดใหม่จากเซิร์ฟเวอร์** ไม่บวกยอดในเครื่องเอง
+    /// คืน `nil` เมื่อสำเร็จ หรือข้อความเหตุผลเมื่อไม่สำเร็จ
+    func redeemDevTopUp(_ option: WalletTopUpOption) async -> String? {
+        guard let service, isConnected else {
+            return "ยังไม่ได้เชื่อมต่อ Supabase"
+        }
+
+        guard let productID = option.appleProductID else {
+            return "แพ็กนี้ยังไม่ได้ผูก product id ของ App Store"
+        }
+
+        do {
+            try await service.redeemDevTopUp(appleProductID: productID)
+            await refreshWallet()
+            return nil
+        } catch {
+            // เซิร์ฟเวอร์อาจเพิ่งสลับโหมด — ถามใหม่เพื่อให้ปุ่มหายเองถ้าไม่อนุญาตแล้ว
+            await refreshDevTopUpAvailability()
+            return error.localizedDescription
         }
     }
 
@@ -3385,6 +3428,7 @@ private struct CustomerSeerProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isAddFundsSheetPresented) {
             AddFundsSheet(
+                supabaseApp: supabaseApp,
                 coinBalance: $coinBalance,
                 reason: topUpReason.isEmpty ? appLanguage.text("Add THB to coins before starting a seer call.", "เติม THB เป็นเหรียญก่อนเริ่มโทรหาหมอดู") : topUpReason,
                 appLanguage: appLanguage
@@ -3928,6 +3972,8 @@ private struct CustomerProfileSpaceView: View {
     @Binding var appAppearance: AppAppearance
     @Binding var appLanguage: AppLanguage
 
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+
     let testAccount: TestAccount
 
     @Binding var coinBalance: Int
@@ -4031,6 +4077,7 @@ private struct CustomerProfileSpaceView: View {
         }
         .sheet(isPresented: $isAddFundsSheetPresented) {
             AddFundsSheet(
+                supabaseApp: supabaseApp,
                 coinBalance: $coinBalance,
                 reason: appLanguage.text("Add THB to get coins for readings and seer calls.", "เติม THB เพื่อรับเหรียญสำหรับคำทำนายและการโทรหาหมอดู"),
                 appLanguage: appLanguage
@@ -4078,6 +4125,7 @@ private struct CustomerWalletSection: View {
 }
 
 private struct AddFundsSheet: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
     @Binding var coinBalance: Int
 
     let reason: String
@@ -4087,6 +4135,9 @@ private struct AddFundsSheet: View {
     @State private var selectedOption = WalletTopUpOption.options[1]
     @State private var selectedMethod: MockPaymentMethod = .applePay
     @State private var didCompletePayment = false
+    @State private var pendingProductID: String?
+    @State private var devTopUpStatus: String?
+    @State private var devTopUpFailure: String?
 
     var body: some View {
         NavigationStack {
@@ -4117,58 +4168,11 @@ private struct AddFundsSheet: View {
                     .padding(16)
                     .cardStyle(borderColor: Color.orange.opacity(0.34))
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: appLanguage.text("Top Up", "เติมเงิน"), subtitle: appLanguage.text("Pay THB and receive in-app coins", "ชำระ THB แล้วรับเหรียญในแอป"))
-
-                        LazyVStack(spacing: 10) {
-                            ForEach(WalletTopUpOption.options) { option in
-                                Button {
-                                    selectedOption = option
-                                } label: {
-                                    WalletTopUpOptionRow(
-                                        option: option,
-                                        isSelected: selectedOption == option,
-                                        appLanguage: appLanguage
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
+                    if supabaseApp.isDevTopUpAvailable {
+                        devTopUpSection
+                    } else {
+                        mockPaymentSection
                     }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: appLanguage.text("Payment", "การชำระเงิน"), subtitle: appLanguage.text("Mock payment method", "วิธีชำระเงินทดสอบ"))
-
-                        LazyVStack(spacing: 10) {
-                            ForEach(MockPaymentMethod.allCases) { method in
-                                Button {
-                                    selectedMethod = method
-                                } label: {
-                                    MockPaymentMethodRow(
-                                        method: method,
-                                        isSelected: selectedMethod == method,
-                                        appLanguage: appLanguage
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    Button(action: completePayment) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "lock.fill")
-                            Text(appLanguage.text("Pay \(selectedOption.priceLabel)", "ชำระ \(selectedOption.priceLabel)"))
-                            HoroCoinIcon(size: 18)
-                            Text(appLanguage.text("+\(selectedOption.coins) coins", "+\(selectedOption.coins) เหรียญ"))
-                        }
-                        .font(.headline)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
                 }
                 .padding(16)
                 .padding(.bottom, 8)
@@ -4191,7 +4195,140 @@ private struct AddFundsSheet: View {
             } message: {
                 Text(appLanguage.text("\(selectedOption.coins) coins were added after paying \(selectedOption.priceLabel) with \(selectedMethod.title(in: appLanguage)).", "เพิ่ม \(selectedOption.coins) เหรียญหลังชำระ \(selectedOption.priceLabel) ด้วย \(selectedMethod.title(in: appLanguage))"))
             }
+            .alert(
+                appLanguage.text("Top Up Failed", "เติมเหรียญไม่สำเร็จ"),
+                isPresented: Binding(get: { devTopUpFailure != nil }, set: { if !$0 { devTopUpFailure = nil } })
+            ) {
+                Button(appLanguage.text("OK", "ตกลง"), role: .cancel) { devTopUpFailure = nil }
+            } message: {
+                Text(devTopUpFailure ?? "")
+            }
+            .task {
+                // ถามทุกครั้งที่เปิดแผ่นนี้ ไม่ใช่แค่ตอน login — โหมดฝั่งเซิร์ฟเวอร์เปลี่ยนได้ระหว่างทาง
+                await supabaseApp.refreshDevTopUpAvailability()
+            }
         }
+    }
+
+    /// เติมเหรียญจริงผ่าน Edge Function `verify-iap` โหมด `local_test`
+    /// แผ่นนี้โผล่เฉพาะตอนเซิร์ฟเวอร์บอกว่าอนุญาต จึงไม่มีทางไปโผล่บนเครื่องผู้ใช้จริง
+    @ViewBuilder
+    private var devTopUpSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: appLanguage.text("Developer Top Up", "เติมเหรียญโหมดนักพัฒนา"),
+                subtitle: appLanguage.text(
+                    "Credits real coins through verify-iap without an Apple receipt",
+                    "เติมเหรียญจริงผ่าน verify-iap โดยไม่ต้องมีใบเสร็จจาก Apple"
+                )
+            )
+
+            if supabaseApp.coinPackages.isEmpty {
+                Text(appLanguage.text("No coin packages are enabled on this server.", "เซิร์ฟเวอร์นี้ยังไม่มีแพ็กเหรียญที่เปิดใช้งาน"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(supabaseApp.coinPackages) { option in
+                        Button {
+                            Task { await redeem(option) }
+                        } label: {
+                            WalletTopUpOptionRow(
+                                option: option,
+                                isSelected: pendingProductID != nil && pendingProductID == option.appleProductID,
+                                appLanguage: appLanguage
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(pendingProductID != nil)
+                    }
+                }
+            }
+
+            if let devTopUpStatus {
+                Text(devTopUpStatus)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// แผ่นชำระเงินจำลองของเดิม — ยังไม่แตะเงินจริงเลย ใช้ตอนแอปอยู่โหมด mock
+    @ViewBuilder
+    private var mockPaymentSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: appLanguage.text("Top Up", "เติมเงิน"), subtitle: appLanguage.text("Pay THB and receive in-app coins", "ชำระ THB แล้วรับเหรียญในแอป"))
+
+            LazyVStack(spacing: 10) {
+                ForEach(WalletTopUpOption.options) { option in
+                    Button {
+                        selectedOption = option
+                    } label: {
+                        WalletTopUpOptionRow(
+                            option: option,
+                            isSelected: selectedOption == option,
+                            appLanguage: appLanguage
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: appLanguage.text("Payment", "การชำระเงิน"), subtitle: appLanguage.text("Mock payment method", "วิธีชำระเงินทดสอบ"))
+
+            LazyVStack(spacing: 10) {
+                ForEach(MockPaymentMethod.allCases) { method in
+                    Button {
+                        selectedMethod = method
+                    } label: {
+                        MockPaymentMethodRow(
+                            method: method,
+                            isSelected: selectedMethod == method,
+                            appLanguage: appLanguage
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        Button(action: completePayment) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock.fill")
+                Text(appLanguage.text("Pay \(selectedOption.priceLabel)", "ชำระ \(selectedOption.priceLabel)"))
+                HoroCoinIcon(size: 18)
+                Text(appLanguage.text("+\(selectedOption.coins) coins", "+\(selectedOption.coins) เหรียญ"))
+            }
+            .font(.headline)
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+    }
+
+    private func redeem(_ option: WalletTopUpOption) async {
+        pendingProductID = option.appleProductID
+        devTopUpStatus = appLanguage.text("Calling verify-iap…", "กำลังเรียก verify-iap…")
+
+        let failure = await supabaseApp.redeemDevTopUp(option)
+        pendingProductID = nil
+
+        if let failure {
+            devTopUpStatus = nil
+            devTopUpFailure = failure
+            return
+        }
+
+        // ยอดต้องมาจากเซิร์ฟเวอร์ ไม่ใช่บวกเองในเครื่อง — ไม่งั้นหน้าจอโกหกได้เมื่อ server คิดไม่ตรง
+        coinBalance = supabaseApp.walletAvailableCoin ?? coinBalance
+        devTopUpStatus = appLanguage.text(
+            "Added \(option.coins) coins. Balance re-read from the server.",
+            "เพิ่ม \(option.coins) เหรียญแล้ว — อ่านยอดใหม่จากเซิร์ฟเวอร์"
+        )
     }
 
     private func completePayment() {
@@ -4239,6 +4376,9 @@ private struct WalletTopUpOption: Identifiable, Equatable {
     let coins: Int
     let priceLabel: String
     let subtitle: String
+    /// product id ฝั่ง App Store — มีเฉพาะแพ็กที่มาจากตาราง `coin_package` จริง
+    /// แพ็กตัวอย่างที่ hardcode ไว้ด้านล่างไม่มี จึงเติมผ่าน verify-iap ไม่ได้
+    let appleProductID: String?
 
     func subtitle(in language: AppLanguage) -> String {
         switch id {
@@ -4258,19 +4398,22 @@ private struct WalletTopUpOption: Identifiable, Equatable {
             id: "starter",
             coins: 200,
             priceLabel: "THB 200",
-            subtitle: "Starter coin pack for short calls"
+            subtitle: "Starter coin pack for short calls",
+            appleProductID: nil
         ),
         WalletTopUpOption(
             id: "popular",
             coins: 500,
             priceLabel: "THB 500",
-            subtitle: "Popular coin pack for chat and 30 min calls"
+            subtitle: "Popular coin pack for chat and 30 min calls",
+            appleProductID: nil
         ),
         WalletTopUpOption(
             id: "deep",
             coins: 1_000,
             priceLabel: "THB 1,000",
-            subtitle: "Deep reading coin pack for longer sessions"
+            subtitle: "Deep reading coin pack for longer sessions",
+            appleProductID: nil
         )
     ]
 }

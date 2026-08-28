@@ -22,6 +22,18 @@
 | `sandbox` | ตรวจเต็มรูปแบบ, environment ต้องเป็น Sandbox | `APPLE_BUNDLE_ID` |
 | `production` | ตรวจเต็มรูปแบบ, environment ต้องเป็น Production | `APPLE_BUNDLE_ID`, `APPLE_APP_APPLE_ID` |
 
+### `GET /functions/v1/verify-iap` — แอปถามว่าเติมแบบ dev ได้ไหม
+
+```
+GET  → { "mode": "local_test", "dev_topup_allowed": true }
+```
+
+ต้องมี session เหมือน POST (ไม่เปิดให้คนที่ยังไม่ login ส่องโหมดของระบบ)
+
+มีไว้เพราะแอปไม่มีทางรู้เองว่าเติมได้ไหม — `payment.iap_mode` ตั้ง `is_public = false`
+(RLS ปิด client อ่านไม่ได้โดยตั้งใจ) ส่วน `ALLOW_UNVERIFIED_IAP` เป็น env ของ function เท่านั้น
+**มีแต่ที่นี่ที่เห็นทั้งสองชั้น** ถ้าให้แอปเดาจากอย่างใดอย่างหนึ่ง ปุ่มจะโผล่บน cloud แล้วกดไม่ได้
+
 ### กันเหรียญฟรีสองชั้น
 
 โหมด `local_test` ต้องผ่าน **ทั้ง** config และ env — ถ้า deploy ขึ้น cloud
@@ -44,8 +56,20 @@
 
 ## ทดสอบ
 
+⚠️ **`supabase start` เสิร์ฟ function ให้ก็จริง แต่ไม่โหลด `.env.local`** — `verify-iap` จะตอบ
+403 `unverified_mode_not_allowed` ทั้งที่ config เป็น `local_test` อยู่แล้ว ต้องยกตัวเสิร์ฟที่มี env
+ขึ้นมาเอง (`scripts/serve-functions.sh` ทำให้ และสร้างไฟล์ env จาก template ถ้ายังไม่มี)
+
 ```bash
 supabase start
+./scripts/serve-functions.sh &            # เสิร์ฟพร้อม .env.local
+./scripts/test-rest-integration.sh        # ข้อ 8 ครอบ verify-iap ทั้งขาเติมได้และขาถูกปฏิเสธ
+./scripts/test-ios.sh                     # ยกตัวเสิร์ฟให้เองตอนชี้ local
+```
+
+ตัวตรวจลายเซ็นทดสอบแยก:
+
+```bash
 supabase functions serve --no-verify-jwt --env-file supabase/functions/.env.local &
 ./scripts/test-iap-verifier.sh
 ```

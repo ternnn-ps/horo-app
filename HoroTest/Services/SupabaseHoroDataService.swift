@@ -114,6 +114,11 @@ struct SupabaseCoinPackage: Decodable, Equatable, Identifiable {
     let priceMinor: Int
     let currency: String
     let allowedMethods: [String]
+    /// product id ฝั่ง App Store — ค่านี้คือสิ่งที่ verify-iap ใช้หาแพ็กว่าจะเติมกี่เหรียญ
+    let appleProductID: String?
+
+    /// จำนวนเหรียญที่จะได้จริงเมื่อซื้อแพ็กนี้ (รวมโบนัส) — server เป็นคนคิด แอปแค่แสดงให้ตรง
+    var totalCoin: Int { coinAmount + bonusCoin }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -123,6 +128,36 @@ struct SupabaseCoinPackage: Decodable, Equatable, Identifiable {
         case priceMinor = "price_minor"
         case currency
         case allowedMethods = "allowed_methods"
+        case appleProductID = "apple_product_id"
+    }
+}
+
+/// คำตอบของ verify-iap ว่าตอนนี้เติมเหรียญแบบ dev ได้ไหม
+///
+/// ทำไมต้องถามเซิร์ฟเวอร์แทนที่จะอ่าน config เอง: เงื่อนไขมีสองชั้นและอยู่คนละที่ —
+/// `app_config.payment.iap_mode` (อยู่ในฐาน แต่ `is_public = false` แอปอ่านไม่ได้โดยตั้งใจ)
+/// กับ env `ALLOW_UNVERIFIED_IAP` (อยู่ที่ Edge Function เท่านั้น ไม่มีทางที่ client จะรู้)
+/// มีแต่เซิร์ฟเวอร์ที่เห็นทั้งสองชั้น ถ้าให้แอปเดาเองปุ่มจะโผล่บน cloud แล้วกดไม่ได้
+struct SupabaseDevTopUpAvailability: Decodable, Equatable {
+    let mode: String
+    let isAllowed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case isAllowed = "dev_topup_allowed"
+    }
+}
+
+/// ผลการเติมเหรียญจาก verify-iap — `coinCredited` ว่างได้เมื่อเป็นใบเสร็จซ้ำที่เคยเติมไปแล้ว
+struct SupabaseDevTopUpReceipt: Decodable, Equatable {
+    let mode: String
+    let coinCredited: Int?
+    let alreadyCredited: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case coinCredited = "coin_credited"
+        case alreadyCredited = "already_credited"
     }
 }
 
@@ -345,11 +380,32 @@ final class SupabaseHoroDataService: HoroDataServicing {
         try await request(
             path: "rest/v1/coin_package",
             queryItems: [
-                URLQueryItem(name: "select", value: "id,code,coin_amount,bonus_coin,price_minor,currency,allowed_methods"),
+                URLQueryItem(name: "select", value: "id,code,coin_amount,bonus_coin,price_minor,currency,allowed_methods,apple_product_id"),
                 URLQueryItem(name: "is_enabled", value: "eq.true"),
                 URLQueryItem(name: "order", value: "sort_order.asc")
             ],
             requiresSession: false
+        )
+    }
+
+    /// ถาม Edge Function ว่าตอนนี้เปิดให้เติมเหรียญแบบ dev ไหม — ใช้ตัดสินว่าจะโชว์ปุ่มหรือไม่
+    func fetchDevTopUpAvailability() async throws -> SupabaseDevTopUpAvailability {
+        try await request(path: "functions/v1/verify-iap")
+    }
+
+    /// เติมเหรียญผ่าน verify-iap โหมด local_test (ไม่มีใบเสร็จจริง ไม่ต้องมีบัญชี Apple Developer)
+    ///
+    /// `transactionID` เป็นตัวกันเติมซ้ำ — ยิงค่าเดิมสองครั้งจะได้ `alreadyCredited` และเหรียญไม่ขยับรอบสอง
+    /// (unique constraint ที่ `iap_receipt` เป็นคนกัน ไม่ใช่แอป)
+    @discardableResult
+    func redeemDevTopUp(
+        appleProductID: String,
+        transactionID: String = UUID().uuidString
+    ) async throws -> SupabaseDevTopUpReceipt {
+        try await request(
+            path: "functions/v1/verify-iap",
+            method: "POST",
+            body: DevTopUpRequestBody(productId: appleProductID, transactionId: transactionID)
         )
     }
 
@@ -710,6 +766,12 @@ final class SupabaseHoroDataService: HoroDataServicing {
             return .server(error.message)
         }
 
+        // Edge Function ตอบคนละรูปกับ PostgREST — `{ error, detail }` ไม่ใช่ `{ message }`
+        // ถ้าไม่ดักตรงนี้ ผู้ใช้จะเห็น JSON ดิบบนหน้าจอ
+        if let edge = try? jsonDecoder.decode(EdgeFunctionErrorResponse.self, from: data) {
+            return .server(edge.readableReason)
+        }
+
         let message = String(data: data, encoding: .utf8) ?? "Unknown Supabase error"
         return .server("Supabase HTTP \(statusCode): \(message)")
     }
@@ -730,6 +792,37 @@ private struct AuthTokenResponse: Decodable {
 private struct AuthUserResponse: Decodable {
     let id: String
     let email: String?
+}
+
+private struct DevTopUpRequestBody: Encodable {
+    // ชื่อฟิลด์ต้องเป็น camelCase — verify-iap อ่าน body.productId / body.transactionId ตรง ๆ
+    let productId: String
+    let transactionId: String
+}
+
+/// error ที่ Edge Function คืนมา แปลงเป็นข้อความที่ผู้ใช้อ่านรู้เรื่อง
+private struct EdgeFunctionErrorResponse: Decodable {
+    let error: String
+    let detail: String?
+
+    var readableReason: String {
+        switch error {
+        case "unverified_mode_not_allowed":
+            return "เซิร์ฟเวอร์นี้ไม่เปิดให้เติมเหรียญแบบ dev (ไม่ได้ตั้ง ALLOW_UNVERIFIED_IAP)"
+        case "unknown_iap_mode":
+            return "โหมดการรับใบเสร็จของเซิร์ฟเวอร์ไม่ถูกต้อง: \(detail ?? "ไม่ทราบ")"
+        case "not_authenticated":
+            return "ต้องเข้าสู่ระบบก่อนจึงจะเติมเหรียญได้"
+        case "credit_failed":
+            return "เติมเหรียญไม่สำเร็จ: \(detail ?? "ไม่ทราบสาเหตุ")"
+        case "receipt_verification_failed":
+            return "ใบเสร็จไม่ผ่านการตรวจสอบ: \(detail ?? "ไม่ทราบสาเหตุ")"
+        case "incomplete_receipt", "missing_jws", "invalid_json":
+            return "ข้อมูลที่ส่งไปไม่ครบ เติมเหรียญไม่ได้ (\(error))"
+        default:
+            return detail.map { "\(error): \($0)" } ?? error
+        }
+    }
 }
 
 private struct SupabaseErrorResponse: Decodable {

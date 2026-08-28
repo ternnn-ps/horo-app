@@ -99,4 +99,50 @@ final class ChataAuthIntegrationTests: XCTestCase {
         await realtime.stop()
         try? await seerService.signOut()
     }
+
+    /// ปุ่มเติมเหรียญโหมด dev — **เซิร์ฟเวอร์เป็นคนบอกว่าเปิดให้ไหม แอปไม่เดาเอง**
+    /// เพราะเงื่อนไขมีสองชั้น (app_config `payment.iap_mode` + env `ALLOW_UNVERIFIED_IAP`)
+    /// และแอปอ่าน app_config เองไม่ได้โดยตั้งใจ (คีย์นั้น is_public = false)
+    ///
+    /// เทสตัวเดียวเดินได้ทั้ง local (อนุญาต → ต้องเติมสำเร็จ) และ cloud (ไม่อนุญาต → ต้องถูกปฏิเสธ
+    /// และเหรียญห้ามขยับ) — ยึดคำตอบของเซิร์ฟเวอร์เป็นตัวตั้ง ไม่ใช่เดาจากว่ารันที่ไหน
+    func testDevTopUpFollowsWhatTheServerAllows() async throws {
+        _ = try await service.signIn(email: "customer@horo.test", password: "HoroTest123!")
+
+        let availability = try await service.fetchDevTopUpAvailability()
+
+        // แพ็กต้องมาจากตาราง coin_package จริง — product id คือค่าที่ต้องส่งให้ verify-iap
+        let packages = try await service.fetchCoinPackages()
+        let package = try XCTUnwrap(
+            packages.first(where: { $0.appleProductID != nil }),
+            "fixture ต้องมีแพ็กที่ตั้ง apple_product_id ไว้"
+        )
+        let productID = try XCTUnwrap(package.appleProductID)
+        let expectedCoin = package.coinAmount + package.bonusCoin
+
+        let before = try await service.fetchWallet().availableCoin
+
+        if availability.isAllowed {
+            XCTAssertEqual(availability.mode, "local_test", "เปิดให้เติมแบบ dev ได้เฉพาะโหมด local_test")
+
+            let receipt = try await service.redeemDevTopUp(appleProductID: productID)
+            XCTAssertEqual(receipt.coinCredited, expectedCoin, "เซิร์ฟเวอร์ต้องเติมเท่าแพ็กที่เลือก")
+
+            let after = try await service.fetchWallet().availableCoin
+            XCTAssertEqual(after - before, expectedCoin, "ยอดในกระเป๋าต้องเพิ่มเท่าแพ็กพอดี")
+        } else {
+            do {
+                _ = try await service.redeemDevTopUp(appleProductID: productID)
+                XCTFail("เซิร์ฟเวอร์บอกว่าไม่อนุญาต แต่กลับเติมสำเร็จ — นี่คือช่องแจกเหรียญฟรี")
+            } catch {
+                XCTAssertFalse(
+                    error.localizedDescription.isEmpty,
+                    "ถูกปฏิเสธแล้วต้องมีเหตุผลให้ผู้ใช้อ่าน ไม่ใช่ error เปล่า"
+                )
+            }
+
+            let after = try await service.fetchWallet().availableCoin
+            XCTAssertEqual(after, before, "ถูกปฏิเสธแล้วเหรียญห้ามขยับ")
+        }
+    }
 }

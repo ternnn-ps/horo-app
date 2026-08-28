@@ -57,7 +57,7 @@ function decodeJwsPayloadUnsafe(jws: string): Record<string, unknown> {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
-  if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
+  if (req.method !== 'POST' && req.method !== 'GET') return json({ error: 'method_not_allowed' }, 405)
 
   const authHeader = req.headers.get('Authorization') ?? ''
   if (!authHeader) return json({ error: 'not_authenticated' }, 401)
@@ -69,18 +69,26 @@ Deno.serve(async (req) => {
   if (userErr || !userData?.user) return json({ error: 'not_authenticated' }, 401)
   const accountId = userData.user.id
 
+  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+  const { data: cfg, error: cfgErr } = await admin
+    .from('app_config').select('value').eq('key', 'payment.iap_mode').single()
+  if (cfgErr) return json({ error: 'config_unavailable' }, 500)
+  const mode = String(cfg.value).replaceAll('"', '')
+
+  // ---- GET: แอปถามว่าเปิดให้เติมเหรียญแบบ dev ไหม ----
+  // มีแต่ที่นี่ที่เห็นเงื่อนไขครบทั้งสองชั้น: `payment.iap_mode` อยู่ในฐานแบบ is_public=false
+  // (client อ่านไม่ได้โดยตั้งใจ) ส่วน ALLOW_UNVERIFIED_IAP เป็น env ของ function เท่านั้น
+  // ถ้าปล่อยให้แอปเดาเอง ปุ่มจะโผล่บน cloud ที่ config เป็น local_test แต่ไม่มี env แล้วกดไม่ได้
+  if (req.method === 'GET') {
+    return json({ mode, dev_topup_allowed: mode === 'local_test' && ALLOW_UNVERIFIED })
+  }
+
   let body: { jws?: string; productId?: string; transactionId?: string }
   try {
     body = await req.json()
   } catch {
     return json({ error: 'invalid_json' }, 400)
   }
-
-  const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
-  const { data: cfg, error: cfgErr } = await admin
-    .from('app_config').select('value').eq('key', 'payment.iap_mode').single()
-  if (cfgErr) return json({ error: 'config_unavailable' }, 500)
-  const mode = String(cfg.value).replaceAll('"', '')
 
   // ---- ตรวจใบเสร็จ ----
   let claims: Record<string, unknown>

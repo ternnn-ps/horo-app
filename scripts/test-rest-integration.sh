@@ -35,6 +35,24 @@ if [[ "${SKIP_FIXTURE:-0}" != "1" ]]; then
   fi
 fi
 
+IS_LOCAL=0
+case "$SUPABASE_URL" in *127.0.0.1*|*localhost*) IS_LOCAL=1 ;; esac
+
+# `supabase start` เสิร์ฟ function ให้ แต่ไม่โหลด .env.local — verify-iap จะตอบ 403 ตลอด
+# จึงต้องยกตัวเสิร์ฟที่มี env ขึ้นมาเอง (เฉพาะ local; บน cloud ใช้ที่ deploy ไว้)
+FN_SERVE_PID=""
+cleanup() { [[ -n "$FN_SERVE_PID" ]] && kill "$FN_SERVE_PID" 2>/dev/null; return 0; }
+trap cleanup EXIT
+
+if (( IS_LOCAL )); then
+  ./scripts/serve-functions.sh >/dev/null 2>&1 &
+  FN_SERVE_PID=$!
+  for _ in $(seq 1 30); do
+    curl -s -m 2 -o /dev/null "$SUPABASE_URL/functions/v1/verify-iap" && break
+    sleep 1
+  done
+fi
+
 PASS=0
 FAIL=0
 
@@ -58,6 +76,25 @@ api() {
     curl -s -X "$method" "$SUPABASE_URL/rest/v1/$path" \
       -H "apikey: $ANON_KEY" -H "Authorization: Bearer $token"
   fi
+}
+
+# เรียก Edge Function — คนละ base path กับ REST และตอบ error คนละรูป (`{error,detail}`)
+fn() {
+  local token=$1 method=$2 name=$3 body=${4:-}
+  if [[ -n "$body" ]]; then
+    curl -s -X "$method" "$SUPABASE_URL/functions/v1/$name" \
+      -H "apikey: $ANON_KEY" -H "Authorization: Bearer $token" \
+      -H "Content-Type: application/json" -d "$body"
+  else
+    curl -s -X "$method" "$SUPABASE_URL/functions/v1/$name" \
+      -H "apikey: $ANON_KEY" -H "Authorization: Bearer $token"
+  fi
+}
+
+# เปลี่ยนโหมด IAP ในฐาน — ทำได้เฉพาะ local (ตาราง app_config เป็น deny-all สำหรับ client)
+set_iap_mode() {
+  docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+    "update public.app_config set value = '\"$1\"'::jsonb where key = 'payment.iap_mode'" >/dev/null 2>&1
 }
 
 echo "── 1. fixture user login แล้วอ่านกระเป๋าตัวเองได้"
@@ -338,6 +375,89 @@ else
       ok "คนนอกไม่ได้รับ broadcast ของห้องคนอื่น ($(head -1 "$OUT_BC"))"
     fi
     rm -f "$BC_OUT" "$OUT_BC"
+  fi
+fi
+
+echo
+echo "── 8. เติมเหรียญโหมด dev ผ่าน Edge Function verify-iap"
+
+# แพ็กต้องมาจากตารางจริง — apple_product_id คือค่าที่ verify-iap ใช้หาว่าเติมกี่เหรียญ
+PKG=$(api "$USER_TOKEN" GET "coin_package?is_enabled=eq.true&apple_product_id=not.is.null&order=sort_order.asc&select=apple_product_id,coin_amount,bonus_coin&limit=1")
+PRODUCT_ID=$(echo "$PKG" | jq -r '.[0].apple_product_id // empty')
+PKG_COIN=$(( $(echo "$PKG" | jq -r '.[0].coin_amount // 0') + $(echo "$PKG" | jq -r '.[0].bonus_coin // 0') ))
+
+if [[ -z "$PRODUCT_ID" ]]; then
+  bad "อ่านแพ็กเติมเหรียญจากตาราง coin_package ได้" "$PKG"
+else
+  ok "แพ็กมาจากตารางจริง: $PRODUCT_ID (+$PKG_COIN เหรียญ)"
+
+  AVAIL=$(fn "$USER_TOKEN" GET "verify-iap")
+  MODE=$(echo "$AVAIL" | jq -r '.mode // empty')
+  # ห้ามใช้ `// empty` กับค่า boolean — jq ถือว่า false เป็น falsy แล้วตกไปเป็น empty
+  ALLOWED=$(echo "$AVAIL" | jq -r '.dev_topup_allowed')
+
+  if [[ -z "$MODE" ]]; then
+    bad "ถามเซิร์ฟเวอร์ได้ว่าเปิดให้เติมแบบ dev ไหม" "$AVAIL"
+  else
+    ok "เซิร์ฟเวอร์ตอบโหมด '$MODE' · เติมแบบ dev ได้: $ALLOWED"
+  fi
+
+  if [[ "$ALLOWED" == "true" ]]; then
+    BEFORE_TOPUP=$(api "$USER_TOKEN" GET "v_my_wallet?select=available_coin" | jq -r '.[0].available_coin')
+    TXN="dev-topup-$(uuidgen | tr 'A-Z' 'a-z')"
+    CREDIT=$(fn "$USER_TOKEN" POST "verify-iap" "{\"productId\":\"$PRODUCT_ID\",\"transactionId\":\"$TXN\"}")
+    CREDITED=$(echo "$CREDIT" | jq -r '.coin_credited // empty')
+    AFTER_TOPUP=$(api "$USER_TOKEN" GET "v_my_wallet?select=available_coin" | jq -r '.[0].available_coin')
+
+    if [[ "$CREDITED" == "$PKG_COIN" ]] && (( AFTER_TOPUP == BEFORE_TOPUP + PKG_COIN )); then
+      ok "เติมสำเร็จ เหรียญเพิ่มเท่าแพ็กพอดี (${BEFORE_TOPUP}→$AFTER_TOPUP)"
+    else
+      bad "เติมสำเร็จ เหรียญเพิ่มเท่าแพ็ก $PKG_COIN" "ได้ credited='$CREDITED' ${BEFORE_TOPUP}→$AFTER_TOPUP · $CREDIT"
+    fi
+
+    # ใบเสร็จซ้ำต้องไม่เติมรอบสอง — ตัวกันอยู่ที่ unique constraint ของ iap_receipt
+    REPLAY=$(fn "$USER_TOKEN" POST "verify-iap" "{\"productId\":\"$PRODUCT_ID\",\"transactionId\":\"$TXN\"}")
+    REPLAYED=$(echo "$REPLAY" | jq -r '.already_credited // empty')
+    REPLAY_AFTER=$(api "$USER_TOKEN" GET "v_my_wallet?select=available_coin" | jq -r '.[0].available_coin')
+
+    if [[ "$REPLAYED" == "true" ]] && (( REPLAY_AFTER == AFTER_TOPUP )); then
+      ok "ยิงใบเสร็จเดิมซ้ำ → already_credited และเหรียญไม่ขยับรอบสอง"
+    else
+      bad "ยิงใบเสร็จเดิมซ้ำแล้วเหรียญต้องไม่ขยับ" "already_credited='$REPLAYED' ${AFTER_TOPUP}→$REPLAY_AFTER · $REPLAY"
+    fi
+  else
+    echo "  ⏭  ข้ามการเติมจริง (เซิร์ฟเวอร์ไม่เปิดให้ — ถูกต้องแล้วถ้าเป็น cloud)"
+  fi
+
+  # โหมดที่ไม่ใช่ local_test ต้องปฏิเสธ — สลับโหมดได้เฉพาะ local เพราะ app_config เป็น deny-all
+  if (( IS_LOCAL )); then
+    ORIGINAL_MODE="$MODE"
+    set_iap_mode "production"
+
+    GUARD=$(fn "$USER_TOKEN" GET "verify-iap")
+    GUARD_ALLOWED=$(echo "$GUARD" | jq -r '.dev_topup_allowed')
+    [[ "$GUARD_ALLOWED" == "false" ]] \
+      && ok "โหมด production → เซิร์ฟเวอร์บอกว่าเติมแบบ dev ไม่ได้ (ปุ่มในแอปจะหายเอง)" \
+      || bad "โหมด production → dev_topup_allowed ต้องเป็น false" "ได้ '$GUARD_ALLOWED' · $GUARD"
+
+    GUARD_BEFORE=$(api "$USER_TOKEN" GET "v_my_wallet?select=available_coin" | jq -r '.[0].available_coin')
+    REJECT=$(fn "$USER_TOKEN" POST "verify-iap" "{\"productId\":\"$PRODUCT_ID\",\"transactionId\":\"must-be-rejected-$(uuidgen | tr 'A-Z' 'a-z')\"}")
+    GUARD_AFTER=$(api "$USER_TOKEN" GET "v_my_wallet?select=available_coin" | jq -r '.[0].available_coin')
+    REJECT_ERROR=$(echo "$REJECT" | jq -r '.error // empty')
+
+    if [[ -n "$REJECT_ERROR" ]] && (( GUARD_AFTER == GUARD_BEFORE )); then
+      ok "โหมด production → ยิงเติมแบบ dev ถูกปฏิเสธ ('$REJECT_ERROR') และเหรียญไม่ขยับ"
+    else
+      bad "โหมด production → ต้องปฏิเสธและเหรียญห้ามขยับ" "$REJECT · ${GUARD_BEFORE}→$GUARD_AFTER"
+    fi
+
+    set_iap_mode "${ORIGINAL_MODE:-local_test}"
+    RESTORED=$(fn "$USER_TOKEN" GET "verify-iap" | jq -r '.mode // empty')
+    [[ "$RESTORED" == "${ORIGINAL_MODE:-local_test}" ]] \
+      && ok "คืนโหมดเดิม '$RESTORED' ให้ฐานเรียบร้อย" \
+      || bad "คืนโหมดเดิมให้ฐาน" "ตอนนี้เป็น '$RESTORED' — แก้ด้วยมือ: update app_config set value='\"local_test\"' where key='payment.iap_mode'"
+  else
+    echo "  ⏭  ข้ามการทดสอบสลับโหมด (แก้ app_config บน remote ตรง ๆ ไม่ได้)"
   fi
 fi
 
