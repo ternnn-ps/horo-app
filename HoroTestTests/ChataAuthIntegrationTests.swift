@@ -197,4 +197,50 @@ final class ChataAuthIntegrationTests: XCTestCase {
         XCTAssertEqual(after.availableCoin, before.availableCoin, "ยกเลิกก่อนหมอดูตอบต้องคืนเต็มจำนวน")
         XCTAssertEqual(after.reservedCoin, before.reservedCoin, "ต้องไม่มีเหรียญค้างใน escrow")
     }
+
+    /// หมอดูต้องเห็นรายได้ของตัวเองเป็นรายก้อน ไม่ใช่มีแต่ยอดรวมในกระเป๋า
+    ///
+    /// เดินลูปเงินครบวงจากในแอปเองแทนที่จะพึ่งสถานะที่ค้างอยู่ในฐาน — ถ้าพึ่งของเก่า
+    /// เทสจะผ่านแบบว่างเปล่าได้เมื่อ fixture รีเซ็ตแล้วยอดเป็น 0 ทั้งคู่ (0 == 0)
+    func testSeerSeesEarningForEachFinishedJob() async throws {
+        _ = try await service.signIn(email: "customer@horo.test", password: "HoroTest123!")
+
+        let seerService = SupabaseHoroDataService(configuration: configuration, authStorageKey: "chata-test-earning-seer")
+        let seerID = try await seerService.signIn(email: "seer@horo.test", password: "HoroTest123!")
+
+        let listings = try await service.fetchSeerListings(matching: nil)
+        let listing = try XCTUnwrap(
+            listings.first(where: { $0.id == seerID && $0.serviceID != nil }),
+            "fixture ต้องมีหมอดู seer@horo.test ที่เปิด service"
+        )
+        let serviceID = try XCTUnwrap(listing.serviceID)
+
+        let earningsBefore = try await seerService.fetchSeerEarnings()
+        let payableBefore = try await seerService.fetchWallet().payableCoin
+
+        // ซื้อ → ตอบ → ขอปิด → ยืนยัน
+        let draft = SupabaseQuestionDraft.startDraft(seerServiceID: serviceID, firstMessage: "ทดสอบรายการรายได้")
+        let question = try await service.submitQuestion(draft)
+        _ = try await seerService.sendQuestionMessage(
+            questionID: question.questionID, senderID: seerID, body: "ตอบเพื่อให้ปิดงานได้"
+        )
+        _ = try await seerService.requestCloseQuestion(id: question.questionID)
+        _ = try await service.respondCloseQuestion(id: question.questionID, accept: true)
+
+        let earningsAfter = try await seerService.fetchSeerEarnings()
+        let payableAfter = try await seerService.fetchWallet().payableCoin
+
+        XCTAssertEqual(earningsAfter.count, earningsBefore.count + 1, "ปิดงานหนึ่งครั้งต้องเกิดรายได้หนึ่งรายการ")
+
+        let earning = try XCTUnwrap(
+            earningsAfter.first(where: { $0.sourceID == question.questionID.uuidString.lowercased() }),
+            "ต้องมีรายการที่ชี้กลับไปหางานที่เพิ่งปิด"
+        )
+        XCTAssertEqual(earning.grossCoin, question.priceCoin, "ยอดที่ลูกค้าจ่ายต้องตรงกับราคางาน")
+        XCTAssertEqual(earning.seerCoin, payableAfter - payableBefore, "ส่วนที่เข้าหมอดูต้องตรงกับยอดค้างจ่ายที่ขยับ")
+        XCTAssertLessThanOrEqual(earning.seerCoin, earning.grossCoin)
+        XCTAssertGreaterThan(earning.revenueShareBps, 0, "ต้อง snapshot อัตราส่วนแบ่งไว้")
+
+        try? await seerService.signOut()
+    }
 }

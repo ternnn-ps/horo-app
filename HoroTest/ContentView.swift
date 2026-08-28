@@ -168,6 +168,7 @@ private struct SeerWorkspaceView: View {
                 DashboardPageView(
                     profile: profileViewModel.profile,
                     payableCoin: supabaseApp.walletPayableCoin,
+                    earnings: supabaseApp.seerEarnings,
                     records: recordViewModel.records,
                     totalCount: recordViewModel.totalCount,
                     activeCount: recordViewModel.activeCount,
@@ -2170,6 +2171,8 @@ private final class SupabaseAppViewModel: ObservableObject {
     /// เซิร์ฟเวอร์อนุญาตให้เติมเหรียญแบบ dev ไหม — **แอปไม่เดาเอง** เพราะเงื่อนไขอยู่สองที่
     /// ที่ client มองไม่เห็นทั้งคู่ (ดู `SupabaseDevTopUpAvailability`)
     @Published private(set) var isDevTopUpAvailable = false
+    /// รายได้รายก้อนของหมอดู — ยอดรวมบอกไม่ได้ว่าเงินมาจากงานไหน
+    @Published private(set) var seerEarnings: [SupabaseSeerEarning] = []
     /// สถานะล่าสุดของคำถามแต่ละใบ (submitted / active / close_requested / completed / cancelled_refunded)
     @Published private(set) var questionStatuses: [UUID: String] = [:]
 
@@ -2219,6 +2222,7 @@ private final class SupabaseAppViewModel: ObservableObject {
             await refreshSeers()
             await refreshCoinPackages()
             await refreshDevTopUpAvailability()
+            await refreshSeerEarnings()
             await refreshConversations(chatStore: chatStore)
             await startRealtime()
 
@@ -2351,6 +2355,20 @@ private final class SupabaseAppViewModel: ObservableObject {
         }
     }
 
+    /// รายได้ของหมอดู — RLS คัดให้เองว่าเห็นเฉพาะของตัวเอง ฝั่งผู้ใช้ทั่วไปจะได้ลิสต์ว่าง
+    private func refreshSeerEarnings() async {
+        guard let service, signedInRole == .seer else {
+            seerEarnings = []
+            return
+        }
+
+        do {
+            seerEarnings = try await service.fetchSeerEarnings()
+        } catch {
+            seerEarnings = []
+        }
+    }
+
     /// ถามเซิร์ฟเวอร์ว่าเปิดให้เติมแบบ dev ไหม — ถามไม่ได้ให้ถือว่าไม่เปิด
     /// (ปุ่มไม่โผล่ ดีกว่าโผล่แล้วกดไม่ได้)
     func refreshDevTopUpAvailability() async {
@@ -2405,6 +2423,8 @@ private final class SupabaseAppViewModel: ObservableObject {
     private func reloadAfterRemoteChange() async {
         guard let boundChatStore else { return }
         await refreshWallet()
+        // งานปิดแล้วรายได้ต้องขึ้นเองบนหน้าจอหมอดู ไม่ใช่ต้องปิดเปิดแอป
+        await refreshSeerEarnings()
         await refreshConversations(chatStore: boundChatStore)
     }
 
@@ -4840,10 +4860,81 @@ private struct CustomerConversation: Identifiable {
     ]
 }
 
+/// รายการรายได้ของหมอดู — ตอบคำถาม "เงินก้อนนี้มาจากงานไหน หักไปเท่าไหร่"
+/// ซึ่งยอดค้างจ่ายก้อนเดียวตอบไม่ได้
+private struct SeerEarningSection: View {
+    let earnings: [SupabaseSeerEarning]
+    let appLanguage: AppLanguage
+
+    private var total: Int { earnings.reduce(0) { $0 + $1.seerCoin } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: appLanguage.text("Earnings", "รายได้"),
+                subtitle: appLanguage.text(
+                    "Every finished job and what reached you",
+                    "งานที่ปิดแล้วแต่ละงาน และส่วนที่ถึงมือคุณ"
+                )
+            )
+
+            if earnings.isEmpty {
+                Text(appLanguage.text("No finished jobs yet.", "ยังไม่มีงานที่ปิดแล้ว"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(earnings.prefix(10)) { earning in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(appLanguage.text("Chat question", "คำถามแบบข้อความ"))
+                                    .font(.subheadline.weight(.semibold))
+
+                                // แสดงส่วนที่แพลตฟอร์มหักด้วย ไม่ใช่โชว์แต่ยอดที่ได้
+                                Text(appLanguage.text(
+                                    "paid \(earning.grossCoin) · platform \(earning.platformCoin)",
+                                    "ลูกค้าจ่าย \(earning.grossCoin) · แพลตฟอร์มหัก \(earning.platformCoin)"
+                                ))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 8)
+
+                            HStack(spacing: 4) {
+                                HoroCoinIcon(size: 14)
+                                Text("+\(earning.seerCoin)")
+                                    .font(.subheadline.weight(.bold).monospacedDigit())
+                            }
+                            .foregroundStyle(.orange)
+                        }
+                        .padding(.vertical, 10)
+
+                        if earning.id != earnings.prefix(10).last?.id {
+                            Divider()
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .cardStyle()
+
+                Text(appLanguage.text(
+                    "\(earnings.count) jobs · \(total) coins earned in total",
+                    "\(earnings.count) งาน · ได้รวม \(total) เหรียญ"
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 private struct DashboardPageView: View {
     let profile: UserProfile
     /// ยอดค้างจ่ายของหมอดู — ขึ้นเมื่องานปิดแล้วเงินออกจาก escrow มาถึงเขาจริง
     let payableCoin: Int?
+    /// รายได้รายก้อน — ยอดค้างจ่ายอย่างเดียวบอกไม่ได้ว่าเงินมาจากงานไหน
+    let earnings: [SupabaseSeerEarning]
     let records: [TestRecord]
     let totalCount: Int
     let activeCount: Int
@@ -4868,6 +4959,8 @@ private struct DashboardPageView: View {
                     appLanguage: appLanguage,
                     onViewProfile: onViewProfile
                 )
+
+                SeerEarningSection(earnings: earnings, appLanguage: appLanguage)
 
                 RoleOverviewSection(activeRole: .seer, appLanguage: appLanguage)
 

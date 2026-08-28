@@ -182,6 +182,33 @@ struct SupabaseDevTopUpReceipt: Decodable, Equatable {
     }
 }
 
+/// รายได้ของหมอดูรายก้อน — projection ที่เขียนคู่กับ ledger ตอนปิดงาน
+///
+/// หน้าจอต้องเล่าได้ว่าเงินก้อนไหนมาจากงานอะไร ไม่ใช่มีแต่ยอดรวม
+/// และ **ระยะรอก่อนถอนได้คิดจาก `createdAt` ของแต่ละก้อน** ไม่ใช่จากยอดรวม
+struct SupabaseSeerEarning: Decodable, Equatable, Identifiable {
+    let id: Int
+    let sourceType: String
+    let sourceID: String
+    let grossCoin: Int
+    let seerCoin: Int
+    let revenueShareBps: Int
+    let createdAt: String
+
+    /// ส่วนที่แพลตฟอร์มหักไป — คิดจากตัวเลขที่ server บันทึกไว้ ไม่ได้คำนวณจากอัตราปัจจุบัน
+    var platformCoin: Int { grossCoin - seerCoin }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sourceType = "source_type"
+        case sourceID = "source_id"
+        case grossCoin = "gross_coin"
+        case seerCoin = "seer_coin"
+        case revenueShareBps = "revenue_share_bps"
+        case createdAt = "created_at"
+    }
+}
+
 struct SupabaseSeerListing: Decodable, Equatable, Identifiable {
     let id: UUID
     let displayName: String
@@ -427,6 +454,17 @@ final class SupabaseHoroDataService {
             path: "functions/v1/verify-iap",
             method: "POST",
             body: DevTopUpRequestBody(productId: appleProductID, transactionId: transactionID)
+        )
+    }
+
+    /// รายได้ของหมอดูที่ login อยู่ — RLS คัดให้เองว่าเห็นเฉพาะของตัวเอง
+    func fetchSeerEarnings() async throws -> [SupabaseSeerEarning] {
+        try await request(
+            path: "rest/v1/seer_earning",
+            queryItems: [
+                URLQueryItem(name: "select", value: "id,source_type,source_id,gross_coin,seer_coin,revenue_share_bps,created_at"),
+                URLQueryItem(name: "order", value: "created_at.desc")
+            ]
         )
     }
 

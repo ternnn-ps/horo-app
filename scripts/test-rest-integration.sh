@@ -281,6 +281,51 @@ else
     bad "เหรียญออกจาก escrow ของผู้ใช้ครบ" "reserved ${USER_RESERVED_BEFORE}→$USER_RESERVED_AFTER, ราคา $PRICE"
   fi
 
+  # รายได้ต้องถูกบันทึกเป็นรายการที่หมอดูอ่านเองได้ ไม่ใช่มีแต่ยอดรวมใน wallet
+  # (ยอดรวมบอกไม่ได้ว่าเงินมาจากงานไหน และระยะรอก่อนถอนต้องคิดจากวันที่ของแต่ละก้อน)
+  EARNING=$(api "$SEER_TOKEN" GET "seer_earning?source_type=eq.question&source_id=eq.$QUESTION_ID&select=gross_coin,seer_coin,revenue_share_bps,ledger_transaction_id")
+  E_GROSS=$(echo "$EARNING" | jq -r '.[0].gross_coin // empty')
+  E_SEER=$(echo "$EARNING" | jq -r '.[0].seer_coin // empty')
+  E_BPS=$(echo "$EARNING" | jq -r '.[0].revenue_share_bps // empty')
+  E_TX=$(echo "$EARNING" | jq -r '.[0].ledger_transaction_id // empty')
+
+  if [[ "$E_GROSS" == "$PRICE" && "$E_SEER" == "$EXPECTED_SHARE" ]]; then
+    ok "หมอดูเห็นรายการรายได้ของงานนี้ (ลูกค้าจ่าย $E_GROSS → เข้าหมอดู $E_SEER)"
+  else
+    bad "หมอดูเห็นรายการรายได้ของงานนี้ (คาด gross=$PRICE seer=$EXPECTED_SHARE)" "$EARNING"
+  fi
+
+  [[ "$E_BPS" == "$SHARE_BPS" ]] \
+    && ok "รายการเก็บอัตราส่วนแบ่ง ณ ตอนนั้นไว้ ($E_BPS bps)" \
+    || bad "รายการเก็บอัตราส่วนแบ่ง ณ ตอนนั้น" "ได้ '$E_BPS' คาด '$SHARE_BPS'"
+
+  [[ -n "$E_TX" && "$E_TX" != "null" ]] \
+    && ok "รายการโยงกลับไปหาหลักฐานใน ledger ได้" \
+    || bad "รายการโยงกลับไปหาหลักฐานใน ledger" "$EARNING"
+
+  # ผลรวมรายได้ทุกก้อนต้องเท่ากับยอดค้างจ่าย ไม่งั้นแปลว่ามีรายได้ที่ไม่ได้ถูกบันทึกเป็นรายการ
+  # (ดักเคสลืม backfill ของเก่าที่ปิดงานไปก่อนมีตารางนี้)
+  SUM_EARN=$(api "$SEER_TOKEN" GET "seer_earning?select=seer_coin" | jq '[.[].seer_coin] | add // 0')
+  if [[ "$SUM_EARN" == "$SEER_AFTER" ]]; then
+    ok "ผลรวมรายการรายได้ตรงกับยอดค้างจ่าย ($SUM_EARN)"
+  else
+    bad "ผลรวมรายการรายได้ต้องตรงกับยอดค้างจ่าย" "รวมรายการได้ $SUM_EARN แต่ payable = $SEER_AFTER"
+  fi
+
+  # ต้องได้ "อาเรย์ว่าง" เท่านั้น — ถ้าเป็น error object แล้วนับ key ได้ 0 ก็จะเขียวทั้งที่ไม่ได้พิสูจน์อะไร
+  OUT_EARN=$(api "$OUTSIDER_TOKEN" GET "seer_earning?select=id" | jq -r 'if type == "array" then length else "ไม่ใช่อาเรย์: " + tostring end')
+  [[ "$OUT_EARN" == "0" ]] \
+    && ok "คนอื่นอ่านรายได้ของหมอดูไม่เห็น (อาเรย์ว่าง)" \
+    || bad "คนอื่นอ่านรายได้ของหมอดูไม่เห็น" "ได้ $OUT_EARN"
+
+  WRITE_EARN=$(api "$SEER_TOKEN" POST "seer_earning" \
+    "{\"seer_id\":\"$SEER_ACCOUNT_ID\",\"source_type\":\"tip\",\"source_id\":\"$(uuidgen)\",\"gross_coin\":999999,\"seer_coin\":999999,\"revenue_share_bps\":10000}")
+  # ต้องเป็น 42501 (ไม่มีสิทธิ์) เท่านั้น — ถ้ารับ error อะไรก็ได้ เทสจะเขียวตอนตารางยังไม่มีด้วย
+  WRITE_CODE=$(echo "$WRITE_EARN" | jq -r '.code // "ไม่มี code"')
+  [[ "$WRITE_CODE" == "42501" ]] \
+    && ok "หมอดูเขียนรายได้ให้ตัวเองไม่ได้ (42501)" \
+    || bad "หมอดูเขียนรายได้ให้ตัวเองไม่ได้ ต้องได้ 42501" "ได้ '$WRITE_CODE' · $WRITE_EARN"
+
   # ตรวจ ledger ต้องเข้าฐานตรง ๆ (ตาราง deny-all ไม่มีทางอ่านผ่าน API) — ทำได้เฉพาะ local
   if [[ "$SUPABASE_URL" == *"127.0.0.1"* || "$SUPABASE_URL" == *"localhost"* ]]; then
     LEDGER=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
