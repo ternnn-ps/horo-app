@@ -245,7 +245,12 @@ final class ChataAuthIntegrationTests: XCTestCase {
     }
 
     /// หมอดูผูกบัญชีธนาคารแล้วต้องเห็นแค่ 4 ตัวท้าย — เลขเต็มห้ามกลับมาถึงแอปเลย
-    func testSeerBindsBankAccountAndOnlySeesLastFourDigits() async throws {
+    ///
+    /// ⚠️ ชื่อขึ้นต้นด้วย `testSeerUpdates...` โดยตั้งใจ — XCTest รันตามลำดับตัวอักษร
+    /// และเทสนี้บันทึกบัญชีใหม่ซึ่ง**รีเซ็ตสถานะกลับเป็น "รอตรวจ"** (พฤติกรรมที่ถูกต้อง)
+    /// ถ้ารันก่อน `testSeerCanCancel...` ตัวนั้นจะถอนเงินไม่ได้แล้วไปเข้าขาสำรองแทน
+    /// ทำให้ขาที่ยกเลิกจริงไม่เคยถูกเดินเลยในการรันทั้งชุด
+    func testSeerUpdatesPayoutAccountAndOnlySeesLastFourDigits() async throws {
         let seerService = SupabaseHoroDataService(configuration: configuration, authStorageKey: "chata-test-payout-seer")
         _ = try await seerService.signIn(email: "seer@horo.test", password: "HoroTest123!")
 
@@ -333,6 +338,64 @@ final class ChataAuthIntegrationTests: XCTestCase {
 
         let payableAfter = try await seerService.fetchWallet().payableCoin
         XCTAssertEqual(payableAfter, payableBefore, "คำขอที่ถูกปฏิเสธห้ามทำให้เหรียญขยับ")
+
+        try? await seerService.signOut()
+    }
+
+    /// หมอดูขอถอนแล้วยกเลิกเอง → เหรียญต้องกลับมาครบจากในแอปจริง
+    ///
+    /// ตัวนี้กินทรัพยากรของตัวเอง (สร้างคำขอถอน) จึงคืนสถานะให้เรียบร้อยเสมอ
+    /// ไม่งั้นเทสตัวอื่นที่รันทีหลังจะเจอคำขอค้างแล้วล้มแบบงง ๆ
+    func testSeerCanCancelOwnPayoutRequestAndGetCoinsBack() async throws {
+        let seerService = SupabaseHoroDataService(configuration: configuration, authStorageKey: "chata-test-cancel-seer")
+        _ = try await seerService.signIn(email: "seer@horo.test", password: "HoroTest123!")
+
+        let fetched = try await seerService.fetchPayoutSummary()
+        let summary = try XCTUnwrap(fetched)
+
+        let before = try await seerService.fetchWallet().payableCoin
+
+        // บัญชีต้องผ่านการตรวจด้วย — เทสตัวที่รันก่อนหน้า (ผูกบัญชีธนาคาร) รีเซ็ตสถานะ
+        // กลับเป็น "รอตรวจ" ทุกครั้งที่บันทึกบัญชีใหม่ ซึ่งเป็นพฤติกรรมที่ถูกต้องของระบบ
+        let account = try await seerService.fetchPayoutAccount()
+        let isReady = (account?.isVerified ?? false)
+            && summary.withdrawableCoin >= summary.minCoin
+            && summary.pendingCoin == 0
+
+        // ไม่ข้ามตัวเองเมื่อเงื่อนไขไม่พร้อม — พิสูจน์ขาตรงข้ามแทน
+        // (เทสที่ข้ามตัวเองไม่แดง แต่ก็ไม่ได้พิสูจน์อะไร ซึ่งอันตรายกว่าแดง)
+        guard isReady else {
+            do {
+                try await seerService.requestPayout(coinAmount: summary.minCoin)
+                XCTFail("ยังไม่มีเงินสุกพอ/มีคำขอค้างอยู่ ต้องขอถอนไม่สำเร็จ")
+            } catch {
+                XCTAssertFalse(error.localizedDescription.isEmpty, "ต้องมีเหตุผลให้หมอดูอ่าน")
+            }
+            let unchanged = try await seerService.fetchWallet().payableCoin
+            XCTAssertEqual(unchanged, before, "คำขอที่ถูกปฏิเสธห้ามทำให้เหรียญขยับ")
+            try? await seerService.signOut()
+            return
+        }
+
+        try await seerService.requestPayout(coinAmount: summary.minCoin)
+        let during = try await seerService.fetchWallet().payableCoin
+        XCTAssertEqual(during, before - summary.minCoin, "ขอถอนแล้วเหรียญต้องออกจากยอดค้างจ่ายทันที")
+
+        let history = try await seerService.fetchPayoutHistory()
+        let pending = try XCTUnwrap(history.first(where: { $0.status == "requested" }), "ต้องเห็นคำขอที่เพิ่งสร้าง")
+        XCTAssertTrue(pending.isCancellable, "คำขอที่ยังไม่โอนต้องยกเลิกได้")
+
+        let result = try await seerService.cancelPayoutRequest(id: pending.id)
+        XCTAssertEqual(result.status, "cancelled")
+
+        let after = try await seerService.fetchWallet().payableCoin
+        XCTAssertEqual(after, before, "ยกเลิกแล้วเหรียญต้องกลับมาครบ")
+
+        // ยกเลิกซ้ำต้องไม่คืนรอบสอง
+        let again = try await seerService.cancelPayoutRequest(id: pending.id)
+        XCTAssertTrue(again.replayed, "ยกเลิกซ้ำต้องบอกว่าเป็นการทำซ้ำ")
+        let afterTwice = try await seerService.fetchWallet().payableCoin
+        XCTAssertEqual(afterTwice, after, "ยกเลิกซ้ำห้ามคืนเหรียญรอบสอง")
 
         try? await seerService.signOut()
     }

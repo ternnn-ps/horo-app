@@ -2390,6 +2390,22 @@ private final class SupabaseAppViewModel: ObservableObject {
         payoutHistory = (try? await service.fetchPayoutHistory()) ?? []
     }
 
+    /// คืน nil เมื่อสำเร็จ หรือข้อความเหตุผลเมื่อไม่สำเร็จ
+    func cancelPayoutRequest(id: UUID) async -> String? {
+        guard let service, isConnected else {
+            return "ยังไม่ได้เชื่อมต่อ Supabase"
+        }
+
+        do {
+            try await service.cancelPayoutRequest(id: id)
+            await refreshWallet()
+            await refreshPayoutAccount()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     func previewPayout(coinAmount: Int) async -> SupabasePayoutQuote? {
         guard let service else { return nil }
         return try? await service.previewPayout(coinAmount: coinAmount)
@@ -5109,6 +5125,7 @@ private struct SeerWithdrawSection: View {
     let appLanguage: AppLanguage
 
     @State private var isFormPresented = false
+    @State private var cancelFailure: String?
 
     private var summary: SupabasePayoutSummary? { supabaseApp.payoutSummary }
     private var isVerified: Bool { supabaseApp.payoutAccount?.isVerified ?? false }
@@ -5195,8 +5212,19 @@ private struct SeerWithdrawSection: View {
 
                             Spacer(minLength: 8)
 
-                            Text("฿\(row.fiatAmountMinor / 100)")
-                                .font(.subheadline.weight(.bold).monospacedDigit())
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text("฿\(row.fiatAmountMinor / 100)")
+                                    .font(.subheadline.weight(.bold).monospacedDigit())
+
+                                if row.isCancellable {
+                                    Button(appLanguage.text("Cancel", "ยกเลิก")) {
+                                        Task { await cancel(row) }
+                                    }
+                                    .font(.caption.weight(.semibold))
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.red)
+                                }
+                            }
                         }
                         .padding(.vertical, 10)
 
@@ -5212,6 +5240,18 @@ private struct SeerWithdrawSection: View {
         .sheet(isPresented: $isFormPresented) {
             SeerWithdrawForm(supabaseApp: supabaseApp, appLanguage: appLanguage)
         }
+        .alert(
+            appLanguage.text("Could not cancel", "ยกเลิกไม่สำเร็จ"),
+            isPresented: Binding(get: { cancelFailure != nil }, set: { if !$0 { cancelFailure = nil } })
+        ) {
+            Button(appLanguage.text("OK", "ตกลง"), role: .cancel) { cancelFailure = nil }
+        } message: {
+            Text(cancelFailure ?? "")
+        }
+    }
+
+    private func cancel(_ row: SupabasePayoutRequest) async {
+        cancelFailure = await supabaseApp.cancelPayoutRequest(id: row.id)
     }
 
     private func statusText(_ row: SupabasePayoutRequest) -> String {

@@ -45,7 +45,28 @@ case "$SUPABASE_URL" in
     ;;
 esac
 
+OUT=$(mktemp)
+# ปิด parallel testing: ค่าเริ่มต้นของ xcodebuild จะโคลน simulator ขึ้นมาหลายตัวพร้อมกัน
+# (เห็นเป็น "Clone 1 of iPhone 17") ซึ่งกินแรมและ CPU หนักมากบนเครื่องที่ swap ตึงอยู่แล้ว
+# ชุดนี้เป็น integration test ที่ยิงฐานเดียวกัน รันขนานไม่ได้ช่วยอะไรอยู่แล้ว
+# เปิดกลับด้วย PARALLEL_TESTS=1 ถ้าวันหนึ่งเครื่องไหว
+PARALLEL_FLAGS=(-parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1)
+[[ "${PARALLEL_TESTS:-0}" == "1" ]] && PARALLEL_FLAGS=()
+
 xcodebuild -project HoroTest.xcodeproj \
   -scheme HoroTest \
   -destination "platform=iOS Simulator,name=$SIMULATOR" \
-  test "$@" 2>&1 | grep -E "Test case|error:|TEST SUCCEEDED|TEST FAILED"
+  "${PARALLEL_FLAGS[@]}" \
+  test "$@" 2>&1 | tee "$OUT" | grep -E "Test case|error:|TEST SUCCEEDED|TEST FAILED"
+
+# เทสที่ข้ามตัวเองไม่แดง แต่ก็ไม่ได้พิสูจน์อะไร — ถ้าไม่โชว์จะเข้าใจผิดว่าครอบครบแล้ว
+# (เจอมาแล้ว: ตัวที่ต้องมีเงินสุกในกระเป๋าข้ามตัวเองทุกรอบที่สอง แต่ขึ้น TEST SUCCEEDED)
+# `grep -c` คืน 0 พร้อม exit 1 เมื่อไม่เจอ — `|| echo 0` จะได้เลข 0 สองตัวติดกัน
+SKIPPED=$(grep -E "was skipped|skipped on" "$OUT" | wc -l | tr -d " ")
+if [[ "$SKIPPED" != "0" ]]; then
+  echo
+  echo "⚠️  มีเทสข้ามตัวเอง $SKIPPED ตัว — ไม่แดง แต่ไม่ได้พิสูจน์อะไร:"
+  grep -oE "'"'"'[A-Za-z]+\.[A-Za-z]+\(\)'"'"' skipped" "$OUT" | sed "s/^/     /"
+  [[ "${ALLOW_SKIPPED:-0}" == "1" ]] || { rm -f "$OUT"; exit 1; }
+fi
+rm -f "$OUT"

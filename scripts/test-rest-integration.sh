@@ -308,13 +308,15 @@ else
     && ok "รายการโยงกลับไปหาหลักฐานใน ledger ได้" \
     || bad "รายการโยงกลับไปหาหลักฐานใน ledger" "$EARNING"
 
-  # ผลรวมรายได้ทุกก้อนต้องเท่ากับยอดค้างจ่าย ไม่งั้นแปลว่ามีรายได้ที่ไม่ได้ถูกบันทึกเป็นรายการ
-  # (ดักเคสลืม backfill ของเก่าที่ปิดงานไปก่อนมีตารางนี้)
+  # invariant: รายได้ทั้งหมด − ที่ถอนออกไปแล้ว = ยอดค้างจ่าย
+  # (เดิมเทียบตรง ๆ กับ payable ซึ่งจริงเฉพาะตอนยังไม่เคยมีการถอน — พอมี payout แล้วต้องหักออก)
   SUM_EARN=$(api "$SEER_TOKEN" GET "seer_earning?select=seer_coin" | jq '[.[].seer_coin] | add // 0')
-  if [[ "$SUM_EARN" == "$SEER_AFTER" ]]; then
-    ok "ผลรวมรายการรายได้ตรงกับยอดค้างจ่าย ($SUM_EARN)"
+  SUM_PAID=$(api "$SEER_TOKEN" GET "v_my_payout_history?status=in.(requested,approved,paid)&select=coin_amount" | jq '[.[].coin_amount] | add // 0')
+  EXPECT_PAYABLE=$(( SUM_EARN - SUM_PAID ))
+  if [[ "$EXPECT_PAYABLE" == "$SEER_AFTER" ]]; then
+    ok "รายได้ทั้งหมด − ที่ถอนออกไปแล้ว = ยอดค้างจ่าย ($SUM_EARN − $SUM_PAID = $SEER_AFTER)"
   else
-    bad "ผลรวมรายการรายได้ต้องตรงกับยอดค้างจ่าย" "รวมรายการได้ $SUM_EARN แต่ payable = $SEER_AFTER"
+    bad "รายได้ทั้งหมด − ที่ถอนออกไปแล้ว ต้องเท่ากับยอดค้างจ่าย" "$SUM_EARN − $SUM_PAID = $EXPECT_PAYABLE แต่ payable = $SEER_AFTER"
   fi
 
   # ต้องได้ "อาเรย์ว่าง" เท่านั้น — ถ้าเป็น error object แล้วนับ key ได้ 0 ก็จะเขียวทั้งที่ไม่ได้พิสูจน์อะไร
@@ -632,16 +634,19 @@ else
     MIN_COIN=$(echo "$SUMMARY" | jq -r '.[0].min_coin // empty')
 
     # --- รายได้ที่เพิ่งเกิดต้องยังไม่สุก ---
-    if [[ "$W_NOW" == "0" && "$PAYABLE_NOW" != "0" ]]; then
-      ok "รายได้ที่เพิ่งเกิดยังถอนไม่ได้ (มียอดค้างจ่าย $PAYABLE_NOW แต่ถอนได้ 0)"
+    # fixture ใส่เงินที่สุกแล้วไว้จำนวนหนึ่ง ส่วนที่หมอดูเพิ่งได้จากงานในหัวข้อ 5 ต้องยังถอนไม่ได้
+    # จึงตรวจที่ "ส่วนต่าง" ไม่ใช่ตรวจว่าถอนได้ = 0
+    HELD=$(( PAYABLE_NOW - W_NOW ))
+    if (( HELD >= EXPECTED_SHARE )); then
+      ok "รายได้ที่เพิ่งเกิดยังถอนไม่ได้ (กันไว้ $HELD เหรียญ ครอบส่วนแบ่ง $EXPECTED_SHARE ที่เพิ่งได้)"
     else
-      bad "รายได้ที่เพิ่งเกิดต้องยังถอนไม่ได้" "payable=$PAYABLE_NOW withdrawable=$W_NOW"
+      bad "รายได้ที่เพิ่งเกิดต้องยังถอนไม่ได้" "payable=$PAYABLE_NOW withdrawable=$W_NOW กันไว้แค่ $HELD"
     fi
 
-    TOO_EARLY=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$MIN_COIN}")
+    TOO_EARLY=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$PAYABLE_NOW}")
     echo "$TOO_EARLY" | grep -q "insufficient_withdrawable" \
-      && ok "ขอถอนก่อนเงินสุก → ถูกปฏิเสธ" \
-      || bad "ขอถอนก่อนเงินสุกต้องถูกปฏิเสธ" "$TOO_EARLY"
+      && ok "ขอถอนรวมส่วนที่ยังไม่สุก → ถูกปฏิเสธ" \
+      || bad "ขอถอนรวมส่วนที่ยังไม่สุกต้องถูกปฏิเสธ" "$TOO_EARLY"
 
     # --- ทำให้รายได้สุก แล้วเติมให้ถึงขั้นต่ำ ---
     docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
@@ -746,6 +751,153 @@ else
   else
     echo "  ⏭  ข้ามส่วนที่ต้องอนุมัติบัญชีและปรับวันที่ (ต้องใช้ psql/service_role)"
   fi
+fi
+
+echo
+echo "── 11. ปิดวงจรการถอน: อนุมัติ · โอนจริง · ยกเลิก · ปฏิเสธ"
+
+if ! (( IS_LOCAL )); then
+  echo "  ⏭  ข้ามทั้งหัวข้อ (ต้องเรียก RPC ของ service_role ผ่าน psql)"
+elif [[ -z "${REQ_ID:-}" ]]; then
+  echo "  ⏭  ข้าม (ไม่มีคำขอถอนจากหัวข้อ 10)"
+else
+  admin_sql() { docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc "$1" 2>&1; }
+  payable() { api "$SEER_TOKEN" GET "v_my_wallet?select=payable_coin" | jq -r '.[0].payable_coin'; }
+  req_status() { api "$SEER_TOKEN" GET "v_my_payout_history?id=eq.$1&select=status,provider_reference,reject_reason"; }
+
+  # --- ผู้ใช้ทั่วไปต้องเรียกไม่ได้ ---
+  BY_USER=$(api "$USER_TOKEN" POST "rpc/admin_review_payout" \
+    "{\"p_payout_request_id\":\"$REQ_ID\",\"p_action\":\"approve\",\"p_reviewer_label\":\"แอบทำ\"}")
+  [[ "$(echo "$BY_USER" | jq -r '.code // "ไม่มี code"')" == "42501" ]] \
+    && ok "ผู้ใช้ทั่วไปเรียกคำสั่งจัดการคำขอถอนไม่ได้ (42501)" \
+    || bad "ผู้ใช้ทั่วไปต้องเรียกไม่ได้ ต้องได้ 42501" "$BY_USER"
+
+  # --- อนุมัติ ---
+  admin_sql "select public.admin_review_payout('$REQ_ID'::uuid, 'approve', 'แอดมินทดสอบ')" >/dev/null
+  [[ "$(req_status "$REQ_ID" | jq -r '.[0].status')" == "approved" ]] \
+    && ok "แอดมินอนุมัติ → หมอดูเห็นสถานะเปลี่ยนเป็น approved" \
+    || bad "แอดมินอนุมัติแล้วหมอดูต้องเห็นสถานะ approved" "$(req_status "$REQ_ID")"
+
+  # --- โอนแล้วต้องมีเลขอ้างอิง ---
+  NO_REF=$(admin_sql "select public.admin_review_payout('$REQ_ID'::uuid, 'mark_paid', 'แอดมินทดสอบ')")
+  echo "$NO_REF" | grep -q "missing_provider_reference" \
+    && ok "กดว่าโอนแล้วโดยไม่ใส่เลขอ้างอิง → ถูกปฏิเสธ" \
+    || bad "กดว่าโอนแล้วต้องบังคับใส่เลขอ้างอิง" "$NO_REF"
+
+  PAYABLE_BEFORE_PAID=$(payable)
+  admin_sql "select public.admin_review_payout('$REQ_ID'::uuid, 'mark_paid', 'แอดมินทดสอบ', null, 'TRX-20260829-001')" >/dev/null
+  PAID_ROW=$(req_status "$REQ_ID")
+  [[ "$(echo "$PAID_ROW" | jq -r '.[0].status')" == "paid" \
+     && "$(echo "$PAID_ROW" | jq -r '.[0].provider_reference')" == "TRX-20260829-001" ]] \
+    && ok "โอนแล้ว หมอดูเห็นสถานะ paid พร้อมเลขอ้างอิง" \
+    || bad "โอนแล้วหมอดูต้องเห็น paid พร้อมเลขอ้างอิง" "$PAID_ROW"
+
+  [[ "$(payable)" == "$PAYABLE_BEFORE_PAID" ]] \
+    && ok "จ่ายจริงแล้วเหรียญไม่ขยับอีก (ออกไปตั้งแต่ตอนขอแล้ว)" \
+    || bad "จ่ายจริงแล้วเหรียญต้องไม่ขยับอีก" "${PAYABLE_BEFORE_PAID}→$(payable)"
+
+  # --- ยกเลิกหลังโอนแล้ว ต้องทำไม่ได้ ---
+  LATE=$(api "$SEER_TOKEN" POST "rpc/cancel_payout_request" "{\"p_payout_request_id\":\"$REQ_ID\"}")
+  echo "$LATE" | grep -q "already_paid\|invalid_state" \
+    && ok "ยกเลิกหลังโอนแล้ว → ทำไม่ได้" \
+    || bad "ยกเลิกหลังโอนแล้วต้องทำไม่ได้" "$LATE"
+
+  # --- หมอดูยกเลิกเอง ---
+  MIN2=$(api "$SEER_TOKEN" GET "v_my_payout_summary?select=min_coin,withdrawable_coin")
+  MIN_C=$(echo "$MIN2" | jq -r '.[0].min_coin')
+  W_LEFT=$(echo "$MIN2" | jq -r '.[0].withdrawable_coin')
+
+  if (( W_LEFT < MIN_C )); then
+    bad "ต้องเหลือเงินพอขอถอนรอบใหม่เพื่อทดสอบการยกเลิก" "เหลือ $W_LEFT ขั้นต่ำ $MIN_C"
+  else
+    BEFORE_CANCEL=$(payable)
+    REQ2=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$MIN_C}")
+    REQ2_ID=$(echo "$REQ2" | jq -r '.payout_request_id // empty')
+    DURING=$(payable)
+
+    CANCEL=$(api "$SEER_TOKEN" POST "rpc/cancel_payout_request" "{\"p_payout_request_id\":\"$REQ2_ID\"}")
+    AFTER_CANCEL=$(payable)
+
+    if [[ -n "$REQ2_ID" && "$AFTER_CANCEL" == "$BEFORE_CANCEL" && "$DURING" != "$BEFORE_CANCEL" ]]; then
+      ok "หมอดูยกเลิกเอง → เหรียญกลับมาครบ (${BEFORE_CANCEL}→${DURING}→$AFTER_CANCEL)"
+    else
+      bad "ยกเลิกแล้วเหรียญต้องกลับมาครบ" "ก่อน=$BEFORE_CANCEL ระหว่าง=$DURING หลัง=$AFTER_CANCEL · $CANCEL"
+    fi
+
+    # การคืนต้องเป็นรายการกลับรายการ ไม่ใช่แก้ของเดิม
+    REV=$(admin_sql "select count(*) from public.ledger_transaction where reference_type='payout_request' and reference_id='$REQ2_ID' and operation='reversal' and reversal_of is not null")
+    [[ "$REV" == "1" ]] \
+      && ok "การคืนเหรียญทำด้วยรายการกลับรายการที่ชี้กลับต้นฉบับ" \
+      || bad "การคืนเหรียญต้องเป็นรายการกลับรายการ" "พบ $REV รายการ"
+
+    DOUBLE=$(api "$SEER_TOKEN" POST "rpc/cancel_payout_request" "{\"p_payout_request_id\":\"$REQ2_ID\"}")
+    AFTER_DOUBLE=$(payable)
+    [[ "$AFTER_DOUBLE" == "$AFTER_CANCEL" ]] \
+      && ok "ยกเลิกซ้ำ → เหรียญไม่คืนรอบสอง" \
+      || bad "ยกเลิกซ้ำต้องไม่คืนเหรียญรอบสอง" "${AFTER_CANCEL}→$AFTER_DOUBLE · $DOUBLE"
+  fi
+
+  # --- แอดมินปฏิเสธพร้อมเหตุผล ---
+  W_LEFT2=$(api "$SEER_TOKEN" GET "v_my_payout_summary?select=withdrawable_coin" | jq -r '.[0].withdrawable_coin')
+  if (( W_LEFT2 >= MIN_C )); then
+    BEFORE_REJ=$(payable)
+    REQ3_ID=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$MIN_C}" | jq -r '.payout_request_id // empty')
+    DURING_REJ=$(payable)
+
+    NO_REASON=$(admin_sql "select public.admin_review_payout('$REQ3_ID'::uuid, 'reject', 'แอดมินทดสอบ')")
+    echo "$NO_REASON" | grep -q "missing_reject_reason" \
+      && ok "ปฏิเสธโดยไม่ใส่เหตุผล → ถูกปฏิเสธ" \
+      || bad "ปฏิเสธต้องบังคับใส่เหตุผล" "$NO_REASON"
+
+    admin_sql "select public.admin_review_payout('$REQ3_ID'::uuid, 'reject', 'แอดมินทดสอบ', 'เลขบัญชีไม่ตรงกับชื่อ')" >/dev/null
+    REJ_ROW=$(req_status "$REQ3_ID")
+    AFTER_REJ=$(payable)
+
+    [[ "$(echo "$REJ_ROW" | jq -r '.[0].status')" == "rejected" \
+       && -n "$(echo "$REJ_ROW" | jq -r '.[0].reject_reason')" ]] \
+      && ok "ถูกปฏิเสธแล้วหมอดูเห็นเหตุผล ('$(echo "$REJ_ROW" | jq -r '.[0].reject_reason')')" \
+      || bad "ถูกปฏิเสธแล้วหมอดูต้องเห็นเหตุผล" "$REJ_ROW"
+
+    if [[ "$AFTER_REJ" == "$BEFORE_REJ" && "$DURING_REJ" != "$BEFORE_REJ" ]]; then
+      ok "ถูกปฏิเสธแล้วเหรียญกลับมาครบ (${BEFORE_REJ}→${DURING_REJ}→$AFTER_REJ)"
+    else
+      bad "ถูกปฏิเสธแล้วเหรียญต้องกลับมาครบ" "ก่อน=$BEFORE_REJ ระหว่าง=$DURING_REJ หลัง=$AFTER_REJ"
+    fi
+  else
+    bad "ต้องเหลือเงินพอขอถอนเพื่อทดสอบการปฏิเสธ" "เหลือ $W_LEFT2"
+  fi
+
+  # --- คิวของแอดมิน ---
+  # ต้องสร้างคำขอค้างไว้จริงก่อน ไม่งั้นคิวว่างแล้วเทสจะเขียวโดยไม่ได้พิสูจน์ว่ามันหาเจอ
+  W_LEFT3=$(api "$SEER_TOKEN" GET "v_my_payout_summary?select=withdrawable_coin" | jq -r '.[0].withdrawable_coin')
+  if (( W_LEFT3 < MIN_C )); then
+    bad "ต้องเหลือเงินพอสร้างคำขอค้างเพื่อทดสอบคิวแอดมิน" "เหลือ $W_LEFT3"
+  else
+    QUEUE_REQ_ID=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$MIN_C}" | jq -r '.payout_request_id // empty')
+
+    QUEUE_HAS=$(admin_sql "select count(*) from public.admin_payout_queue(0) where payout_request_id = '$QUEUE_REQ_ID'")
+    [[ "$QUEUE_HAS" == "1" ]] \
+      && ok "คิวแอดมินหาคำขอที่ค้างอยู่เจอ พร้อมข้อมูลบัญชีปลายทาง" \
+      || bad "คิวแอดมินต้องหาคำขอที่ค้างอยู่เจอ" "นับได้ '$QUEUE_HAS'"
+
+    # คำขอที่เพิ่งสร้างต้องยังไม่นับว่า "ค้างเกินกำหนด"
+    STALE=$(admin_sql "select count(*) from public.admin_payout_queue(24) where payout_request_id = '$QUEUE_REQ_ID'")
+    [[ "$STALE" == "0" ]] \
+      && ok "คำขอที่เพิ่งสร้างไม่ถูกนับว่าค้างเกินกำหนด" \
+      || bad "คำขอที่เพิ่งสร้างต้องไม่ถูกนับว่าค้างเกิน 24 ชม." "นับได้ '$STALE'"
+
+    QUEUE_ROW=$(admin_sql "select bank_code || '/' || account_last4 from public.admin_payout_queue(0) where payout_request_id = '$QUEUE_REQ_ID'")
+    [[ "$QUEUE_ROW" == *"/"* ]] \
+      && ok "คิวบอกปลายทางที่ต้องโอนได้ ($QUEUE_ROW)" \
+      || bad "คิวต้องบอกปลายทางที่ต้องโอน" "ได้ '$QUEUE_ROW'"
+
+    api "$SEER_TOKEN" POST "rpc/cancel_payout_request" "{\"p_payout_request_id\":\"$QUEUE_REQ_ID\"}" >/dev/null
+  fi
+
+  LEDGER3=$(admin_sql "select count(*) from (select transaction_id from public.ledger_entry group by transaction_id having sum(amount) <> 0) t")
+  [[ "$LEDGER3" == "0" ]] \
+    && ok "ledger สมดุลหลังเดินครบทุกเส้นทางของการถอน" \
+    || bad "ledger สมดุลหลังเดินครบทุกเส้นทาง" "พบ $LEDGER3 รายการไม่สมดุล"
 fi
 
 echo

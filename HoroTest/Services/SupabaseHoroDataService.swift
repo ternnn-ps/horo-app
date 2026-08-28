@@ -232,6 +232,16 @@ struct SupabasePayoutQuote: Decodable, Equatable {
     }
 }
 
+struct SupabasePayoutCancelResult: Decodable, Equatable {
+    let status: String
+    let replayed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case replayed
+    }
+}
+
 struct SupabasePayoutRequest: Decodable, Equatable, Identifiable {
     let id: UUID
     let coinAmount: Int
@@ -240,6 +250,9 @@ struct SupabasePayoutRequest: Decodable, Equatable, Identifiable {
     let providerReference: String?
     let rejectReason: String?
     let createdAt: String
+
+    /// ยกเลิกได้ตราบใดที่ยังไม่โอน — เซิร์ฟเวอร์เป็นคนบังคับอีกชั้น
+    var isCancellable: Bool { status == "requested" || status == "approved" }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -564,6 +577,16 @@ final class SupabaseHoroDataService {
         )
     }
 
+    /// ยกเลิกคำขอถอนของตัวเอง — ทำได้ก่อนแอดมินโอนเท่านั้น
+    @discardableResult
+    func cancelPayoutRequest(id: UUID) async throws -> SupabasePayoutCancelResult {
+        try await request(
+            path: "rest/v1/rpc/cancel_payout_request",
+            method: "POST",
+            body: PayoutRequestIDBody(p_payout_request_id: id.uuidString)
+        )
+    }
+
     /// ถามเซิร์ฟเวอร์ว่าถอนเท่านี้จะได้เงินจริงเท่าไหร่ — ไม่มีผลข้างเคียง
     func previewPayout(coinAmount: Int) async throws -> SupabasePayoutQuote {
         try await request(
@@ -868,6 +891,10 @@ private struct AuthTokenResponse: Decodable {
 private struct AuthUserResponse: Decodable {
     let id: String
     let email: String?
+}
+
+private struct PayoutRequestIDBody: Encodable {
+    let p_payout_request_id: String
 }
 
 private struct PayoutAmountBody: Encodable {
