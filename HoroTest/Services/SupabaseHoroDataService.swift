@@ -1,5 +1,35 @@
 import Foundation
 
+/// error กลางของชั้นที่คุยกับ Supabase
+///
+/// เคยอยู่ใน `HoroDataService.swift` คู่กับ protocol `HoroDataServicing` ของยุค mock
+/// พอลบ protocol นั้นทิ้ง (ticket 09) เลยย้ายมาอยู่กับ client ตัวจริงซึ่งเป็นที่เดียวที่ throw มัน
+enum HoroDataError: Error, Equatable, LocalizedError {
+    case unauthenticated
+    case notFound(String)
+    case invalidInput(String)
+    case notConfigured(String)
+    case server(String)
+    case decoding(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unauthenticated:
+            return "No signed-in user is available."
+        case .notFound(let message):
+            return message
+        case .invalidInput(let message):
+            return message
+        case .notConfigured(let message):
+            return message
+        case .server(let message):
+            return message
+        case .decoding(let message):
+            return message
+        }
+    }
+}
+
 struct SupabaseConfiguration: Equatable {
     let url: URL
     let anonKey: String
@@ -76,15 +106,6 @@ struct SupabaseAccount: Decodable, Equatable, Identifiable {
         case user
         case seer
         case admin
-
-        var appRole: HoroUserRole {
-            switch self {
-            case .seer:
-                return .seer
-            case .user, .admin:
-                return .customer
-            }
-        }
     }
 
     let id: UUID
@@ -114,6 +135,11 @@ struct SupabaseCoinPackage: Decodable, Equatable, Identifiable {
     let priceMinor: Int
     let currency: String
     let allowedMethods: [String]
+    /// product id ฝั่ง App Store — ค่านี้คือสิ่งที่ verify-iap ใช้หาแพ็กว่าจะเติมกี่เหรียญ
+    let appleProductID: String?
+
+    /// จำนวนเหรียญที่จะได้จริงเมื่อซื้อแพ็กนี้ (รวมโบนัส) — server เป็นคนคิด แอปแค่แสดงให้ตรง
+    var totalCoin: Int { coinAmount + bonusCoin }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -123,6 +149,36 @@ struct SupabaseCoinPackage: Decodable, Equatable, Identifiable {
         case priceMinor = "price_minor"
         case currency
         case allowedMethods = "allowed_methods"
+        case appleProductID = "apple_product_id"
+    }
+}
+
+/// คำตอบของ verify-iap ว่าตอนนี้เติมเหรียญแบบ dev ได้ไหม
+///
+/// ทำไมต้องถามเซิร์ฟเวอร์แทนที่จะอ่าน config เอง: เงื่อนไขมีสองชั้นและอยู่คนละที่ —
+/// `app_config.payment.iap_mode` (อยู่ในฐาน แต่ `is_public = false` แอปอ่านไม่ได้โดยตั้งใจ)
+/// กับ env `ALLOW_UNVERIFIED_IAP` (อยู่ที่ Edge Function เท่านั้น ไม่มีทางที่ client จะรู้)
+/// มีแต่เซิร์ฟเวอร์ที่เห็นทั้งสองชั้น ถ้าให้แอปเดาเองปุ่มจะโผล่บน cloud แล้วกดไม่ได้
+struct SupabaseDevTopUpAvailability: Decodable, Equatable {
+    let mode: String
+    let isAllowed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case isAllowed = "dev_topup_allowed"
+    }
+}
+
+/// ผลการเติมเหรียญจาก verify-iap — `coinCredited` ว่างได้เมื่อเป็นใบเสร็จซ้ำที่เคยเติมไปแล้ว
+struct SupabaseDevTopUpReceipt: Decodable, Equatable {
+    let mode: String
+    let coinCredited: Int?
+    let alreadyCredited: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case coinCredited = "coin_credited"
+        case alreadyCredited = "already_credited"
     }
 }
 
@@ -197,22 +253,65 @@ struct SupabaseQuestionMessage: Decodable, Equatable, Identifiable {
     }
 }
 
+/// คำถามที่กำลังร่าง พร้อม idempotency key ที่ต้องคงค่าเดิมตลอดอายุของ draft
+///
+/// `submit_question` กันการหักเหรียญซ้ำด้วย `client_request_id` — ถ้าส่ง key เดิมมันจะคืน
+/// `replayed: true` โดยไม่แตะกระเป๋าเงิน แต่กลไกนี้ใช้ไม่ได้เลยถ้า client สุ่ม key ใหม่ตอน retry
+/// จึงไม่มี default UUID ใน init: ต้องสร้างผ่าน `startDraft` ครั้งเดียวตอนเริ่มร่าง
+/// แล้วส่งตัวเดิมซ้ำจนกว่าจะสำเร็จหรือผู้ใช้ทิ้ง draft
 struct SupabaseQuestionDraft: Equatable {
     let seerServiceID: UUID
     let firstMessage: String
     let clientMessageID: UUID
     let clientRequestID: UUID
 
-    init(
+    static func startDraft(seerServiceID: UUID, firstMessage: String) -> SupabaseQuestionDraft {
+        SupabaseQuestionDraft(
+            seerServiceID: seerServiceID,
+            firstMessage: firstMessage,
+            clientMessageID: UUID(),
+            clientRequestID: UUID()
+        )
+    }
+
+    /// แก้ข้อความได้โดยคง key เดิม — ยังเป็นคำถามเดียวกันที่ยังส่งไม่สำเร็จ
+    func replacingMessage(_ text: String) -> SupabaseQuestionDraft {
+        SupabaseQuestionDraft(
+            seerServiceID: seerServiceID,
+            firstMessage: text,
+            clientMessageID: clientMessageID,
+            clientRequestID: clientRequestID
+        )
+    }
+}
+
+/// ผลลัพธ์ของ RPC ที่เปลี่ยนสถานะคำถาม — cancel / request_close / respond_close คืนรูปเดียวกัน
+/// `replayed` มาเมื่อเรียกซ้ำบนสถานะที่ทำไปแล้ว (ไม่ถือว่าผิดพลาด และไม่แตะเงินรอบสอง)
+struct SupabaseQuestionLifecycle: Decodable, Equatable {
+    let questionID: UUID
+    let status: String
+    let replayed: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case questionID = "question_id"
+        case status
+        case replayed
+    }
+}
+
+/// กติกาเดียวของการเลือก idempotency key ตอนซื้อคำถาม — แยกออกมาเพื่อให้เทสได้
+///
+/// บั๊กที่กันอยู่: ผู้ใช้กดส่ง เน็ตหลุด กดใหม่ ถ้าได้ key ใหม่ = ซื้อสองครั้ง หักเหรียญสองรอบ
+enum QuestionDraftPolicy {
+    static func draft(
+        reusing pending: SupabaseQuestionDraft?,
         seerServiceID: UUID,
-        firstMessage: String,
-        clientMessageID: UUID = UUID(),
-        clientRequestID: UUID = UUID()
-    ) {
-        self.seerServiceID = seerServiceID
-        self.firstMessage = firstMessage
-        self.clientMessageID = clientMessageID
-        self.clientRequestID = clientRequestID
+        message: String
+    ) -> SupabaseQuestionDraft {
+        if let pending, pending.seerServiceID == seerServiceID {
+            return pending.replacingMessage(message)
+        }
+        return .startDraft(seerServiceID: seerServiceID, firstMessage: message)
     }
 }
 
@@ -232,51 +331,38 @@ struct SupabaseSubmittedQuestion: Decodable, Equatable {
     }
 }
 
-final class SupabaseHoroDataService: HoroDataServicing {
+final class SupabaseHoroDataService {
     let configuration: SupabaseConfiguration
+    let auth: ChataAuth
 
-    private var session: SupabaseAuthSession?
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
 
-    init(configuration: SupabaseConfiguration) {
+    init(configuration: SupabaseConfiguration, authStorageKey: String? = nil) {
         self.configuration = configuration
+        self.auth = ChataAuth(configuration: configuration, storageKey: authStorageKey)
     }
 
     var isSignedIn: Bool {
-        session != nil
+        auth.isSignedIn
     }
 
     var signedInUserID: UUID? {
-        session?.userID
+        auth.currentUserID
     }
 
-    func signIn(email: String, password: String) async throws -> SupabaseAuthSession {
-        let body = [
-            "email": email,
-            "password": password
-        ]
+    @discardableResult
+    func signIn(email: String, password: String) async throws -> UUID {
+        try await auth.signIn(email: email, password: password)
+    }
 
-        let response: AuthTokenResponse = try await request(
-            path: "auth/v1/token",
-            queryItems: [URLQueryItem(name: "grant_type", value: "password")],
-            method: "POST",
-            body: body,
-            requiresSession: false
-        )
+    @discardableResult
+    func signUp(email: String, password: String) async throws -> UUID {
+        try await auth.signUp(email: email, password: password)
+    }
 
-        guard let userID = UUID(uuidString: response.user.id) else {
-            throw HoroDataError.decoding("Supabase auth returned an invalid user id.")
-        }
-
-        let session = SupabaseAuthSession(
-            userID: userID,
-            email: response.user.email ?? email,
-            accessToken: response.accessToken,
-            refreshToken: response.refreshToken
-        )
-        self.session = session
-        return session
+    func signOut() async throws {
+        try await auth.signOut()
     }
 
     func fetchAccount() async throws -> SupabaseAccount {
@@ -315,11 +401,32 @@ final class SupabaseHoroDataService: HoroDataServicing {
         try await request(
             path: "rest/v1/coin_package",
             queryItems: [
-                URLQueryItem(name: "select", value: "id,code,coin_amount,bonus_coin,price_minor,currency,allowed_methods"),
+                URLQueryItem(name: "select", value: "id,code,coin_amount,bonus_coin,price_minor,currency,allowed_methods,apple_product_id"),
                 URLQueryItem(name: "is_enabled", value: "eq.true"),
                 URLQueryItem(name: "order", value: "sort_order.asc")
             ],
             requiresSession: false
+        )
+    }
+
+    /// ถาม Edge Function ว่าตอนนี้เปิดให้เติมเหรียญแบบ dev ไหม — ใช้ตัดสินว่าจะโชว์ปุ่มหรือไม่
+    func fetchDevTopUpAvailability() async throws -> SupabaseDevTopUpAvailability {
+        try await request(path: "functions/v1/verify-iap")
+    }
+
+    /// เติมเหรียญผ่าน verify-iap โหมด local_test (ไม่มีใบเสร็จจริง ไม่ต้องมีบัญชี Apple Developer)
+    ///
+    /// `transactionID` เป็นตัวกันเติมซ้ำ — ยิงค่าเดิมสองครั้งจะได้ `alreadyCredited` และเหรียญไม่ขยับรอบสอง
+    /// (unique constraint ที่ `iap_receipt` เป็นคนกัน ไม่ใช่แอป)
+    @discardableResult
+    func redeemDevTopUp(
+        appleProductID: String,
+        transactionID: String = UUID().uuidString
+    ) async throws -> SupabaseDevTopUpReceipt {
+        try await request(
+            path: "functions/v1/verify-iap",
+            method: "POST",
+            body: DevTopUpRequestBody(productId: appleProductID, transactionId: transactionID)
         )
     }
 
@@ -442,156 +549,34 @@ final class SupabaseHoroDataService: HoroDataServicing {
         return message
     }
 
-    func signInMock(as role: HoroUserRole) async throws -> HoroUser {
-        let email = role == .seer ? "seer@horo.test" : "customer@horo.test"
-        let session = try await signIn(email: email, password: configuration.testPassword)
-        let account = try await fetchAccount()
 
-        return HoroUser(
-            id: session.userID,
-            role: account.role.appRole,
-            displayName: session.email,
-            email: session.email
-        )
-    }
-
-    func currentUser() async -> HoroUser? {
-        guard let session else {
-            return nil
-        }
-
-        return HoroUser(
-            id: session.userID,
-            role: .customer,
-            displayName: session.email,
-            email: session.email
-        )
-    }
-
-    func fetchSeers(matching query: String?) async throws -> [SeerProfile] {
-        let listings = try await fetchSeerListings(matching: query)
-
-        return listings.map { listing in
-            SeerProfile(
-                id: listing.id,
-                userId: listing.id,
-                displayName: listing.displayName,
-                headline: listing.skills.first ?? "Horo Seer",
-                bio: listing.bio,
-                skills: listing.skills,
-                styles: [],
-                ratingAverage: listing.ratingAverage ?? 0,
-                reviewCount: listing.ratingCount,
-                rateLabel: listing.priceCoin.map { "\($0) coins" } ?? "Ask",
-                isOnline: listing.isActive
-            )
-        }
-    }
-
-    func fetchSeer(id: UUID) async throws -> SeerProfile {
-        guard let listing = try await fetchSeerListings(matching: nil).first(where: { $0.id == id }) else {
-            throw HoroDataError.notFound("Seer profile was not found.")
-        }
-
-        return SeerProfile(
-            id: listing.id,
-            userId: listing.id,
-            displayName: listing.displayName,
-            headline: listing.skills.first ?? "Horo Seer",
-            bio: listing.bio,
-            skills: listing.skills,
-            styles: [],
-            ratingAverage: listing.ratingAverage ?? 0,
-            reviewCount: listing.ratingCount,
-            rateLabel: listing.priceCoin.map { "\($0) coins" } ?? "Ask",
-            isOnline: listing.isActive
-        )
-    }
-
-    func fetchCustomerProfile(userId: UUID) async throws -> CustomerProfile {
-        let rows: [SupabaseUserProfileRow] = try await request(
-            path: "rest/v1/user_profile",
-            queryItems: [
-                URLQueryItem(name: "select", value: "account_id,display_name,birthdate,created_at,updated_at"),
-                URLQueryItem(name: "account_id", value: "eq.\(userId.uuidString)"),
-                URLQueryItem(name: "limit", value: "1")
-            ]
-        )
-
-        guard let row = rows.first else {
-            throw HoroDataError.notFound("Customer profile was not found.")
-        }
-
-        return CustomerProfile(
-            id: row.accountID,
-            userId: row.accountID,
-            displayName: row.displayName,
-            memberTier: "Standard"
-        )
-    }
-
-    func createReadingRequest(_ draft: ReadingRequestDraft) async throws -> ReadingRequest {
-        throw HoroDataError.notConfigured("Use submitQuestion for the current Supabase question schema.")
-    }
-
-    func fetchReadingRequests(for userId: UUID, role: HoroUserRole) async throws -> [ReadingRequest] {
-        let questions = try await fetchQuestions()
-
-        return questions.map { question in
-            ReadingRequest(
-                id: question.id,
-                customerId: question.userID,
-                seerId: question.seerID,
-                topic: "Question",
-                question: "",
-                status: ReadingRequestStatus(rawValue: question.status) ?? .active,
-                createdAt: Date(),
-                updatedAt: Date()
-            )
-        }
-    }
-
-    func updateReadingRequestStatus(id: UUID, status: ReadingRequestStatus) async throws -> ReadingRequest {
-        throw HoroDataError.notConfigured("Use question lifecycle RPCs for the current Supabase question schema.")
-    }
-
-    func deleteReadingRequest(id: UUID) async throws {
-        throw HoroDataError.notConfigured("Use cancel_question for the current Supabase question schema.")
-    }
-
-    func fetchChatThreads(for userId: UUID, role: HoroUserRole) async throws -> [ChatThread] {
-        throw HoroDataError.notConfigured("Chat threads are represented by question rows in the current Supabase schema.")
-    }
-
-    func fetchMessages(threadId: UUID) async throws -> [ChatMessageRecord] {
-        let messages = try await fetchMessages(questionID: threadId)
-
-        return messages.map { message in
-            ChatMessageRecord(
-                threadId: message.questionID,
-                senderId: message.senderID ?? UUID(),
-                senderRole: .customer,
-                body: message.content ?? "",
-                createdAt: Date()
-            )
-        }
-    }
-
+    /// หมอดูกดขอปิดงาน — ยังไม่มีเงินย้ายจนกว่าผู้ใช้จะยืนยัน
     @discardableResult
-    func sendMessage(
-        threadId: UUID,
-        senderId: UUID,
-        senderRole: HoroUserRole,
-        body: String
-    ) async throws -> ChatMessageRecord {
-        let message = try await sendQuestionMessage(questionID: threadId, senderID: senderId, body: body)
+    func requestCloseQuestion(id: UUID) async throws -> SupabaseQuestionLifecycle {
+        try await request(
+            path: "rest/v1/rpc/request_close_question",
+            method: "POST",
+            body: ["p_question_id": id.uuidString]
+        )
+    }
 
-        return ChatMessageRecord(
-            threadId: message.questionID,
-            senderId: message.senderID ?? senderId,
-            senderRole: senderRole,
-            body: message.content ?? "",
-            createdAt: Date()
+    /// ผู้ใช้ตอบคำขอปิดงาน — accept = true คือจุดที่เหรียญออกจาก escrow เข้าหมอดูจริง
+    @discardableResult
+    func respondCloseQuestion(id: UUID, accept: Bool) async throws -> SupabaseQuestionLifecycle {
+        try await request(
+            path: "rest/v1/rpc/respond_close_question",
+            method: "POST",
+            body: RespondCloseBody(questionID: id.uuidString, accept: accept)
+        )
+    }
+
+    /// ผู้ใช้ยกเลิกคำถามที่หมอดูยังไม่ตอบ — คืนเหรียญเต็มจำนวน
+    @discardableResult
+    func cancelQuestion(id: UUID) async throws -> SupabaseQuestionLifecycle {
+        try await request(
+            path: "rest/v1/rpc/cancel_question",
+            method: "POST",
+            body: ["p_question_id": id.uuidString]
         )
     }
 
@@ -606,7 +591,8 @@ final class SupabaseHoroDataService: HoroDataServicing {
         var request = URLRequest(url: url(path: path, queryItems: queryItems))
         request.httpMethod = method
         request.setValue(configuration.anonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(requiresSession ? try accessToken() : configuration.anonKey)", forHTTPHeaderField: "Authorization")
+        let bearer = requiresSession ? try await auth.accessToken() : configuration.anonKey
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         for (key, value) in headers {
@@ -643,17 +629,15 @@ final class SupabaseHoroDataService: HoroDataServicing {
         return components?.url ?? endpoint
     }
 
-    private func accessToken() throws -> String {
-        guard let accessToken = session?.accessToken else {
-            throw HoroDataError.unauthenticated
-        }
-
-        return accessToken
-    }
-
     private func decodeSupabaseError(from data: Data, statusCode: Int) -> HoroDataError {
         if let error = try? jsonDecoder.decode(SupabaseErrorResponse.self, from: data) {
             return .server(error.message)
+        }
+
+        // Edge Function ตอบคนละรูปกับ PostgREST — `{ error, detail }` ไม่ใช่ `{ message }`
+        // ถ้าไม่ดักตรงนี้ ผู้ใช้จะเห็น JSON ดิบบนหน้าจอ
+        if let edge = try? jsonDecoder.decode(EdgeFunctionErrorResponse.self, from: data) {
+            return .server(edge.readableReason)
         }
 
         let message = String(data: data, encoding: .utf8) ?? "Unknown Supabase error"
@@ -676,6 +660,37 @@ private struct AuthTokenResponse: Decodable {
 private struct AuthUserResponse: Decodable {
     let id: String
     let email: String?
+}
+
+private struct DevTopUpRequestBody: Encodable {
+    // ชื่อฟิลด์ต้องเป็น camelCase — verify-iap อ่าน body.productId / body.transactionId ตรง ๆ
+    let productId: String
+    let transactionId: String
+}
+
+/// error ที่ Edge Function คืนมา แปลงเป็นข้อความที่ผู้ใช้อ่านรู้เรื่อง
+private struct EdgeFunctionErrorResponse: Decodable {
+    let error: String
+    let detail: String?
+
+    var readableReason: String {
+        switch error {
+        case "unverified_mode_not_allowed":
+            return "เซิร์ฟเวอร์นี้ไม่เปิดให้เติมเหรียญแบบ dev (ไม่ได้ตั้ง ALLOW_UNVERIFIED_IAP)"
+        case "unknown_iap_mode":
+            return "โหมดการรับใบเสร็จของเซิร์ฟเวอร์ไม่ถูกต้อง: \(detail ?? "ไม่ทราบ")"
+        case "not_authenticated":
+            return "ต้องเข้าสู่ระบบก่อนจึงจะเติมเหรียญได้"
+        case "credit_failed":
+            return "เติมเหรียญไม่สำเร็จ: \(detail ?? "ไม่ทราบสาเหตุ")"
+        case "receipt_verification_failed":
+            return "ใบเสร็จไม่ผ่านการตรวจสอบ: \(detail ?? "ไม่ทราบสาเหตุ")"
+        case "incomplete_receipt", "missing_jws", "invalid_json":
+            return "ข้อมูลที่ส่งไปไม่ครบ เติมเหรียญไม่ได้ (\(error))"
+        default:
+            return detail.map { "\(error): \($0)" } ?? error
+        }
+    }
 }
 
 private struct SupabaseErrorResponse: Decodable {
@@ -726,5 +741,15 @@ private struct SupabaseUserProfileRow: Decodable, Equatable {
         case birthdate
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+    }
+}
+
+private struct RespondCloseBody: Encodable {
+    let questionID: String
+    let accept: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case questionID = "p_question_id"
+        case accept = "p_accept"
     }
 }

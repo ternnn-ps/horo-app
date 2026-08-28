@@ -167,6 +167,7 @@ private struct SeerWorkspaceView: View {
             NavigationStack {
                 DashboardPageView(
                     profile: profileViewModel.profile,
+                    payableCoin: supabaseApp.walletPayableCoin,
                     records: recordViewModel.records,
                     totalCount: recordViewModel.totalCount,
                     activeCount: recordViewModel.activeCount,
@@ -267,6 +268,7 @@ private struct CustomerWorkspaceView: View {
                 CustomerProfileSpaceView(
                     appAppearance: $appAppearance,
                     appLanguage: $appLanguage,
+                    supabaseApp: supabaseApp,
                     testAccount: testAccount,
                     coinBalance: $coinBalance,
                     onLogout: onLogout
@@ -1280,6 +1282,116 @@ private struct HoroCoinIcon: View {
     }
 }
 
+
+/// แถบจัดการงานเหนือช่องพิมพ์ — จุดเดียวในแอปที่เงินออกจาก escrow
+///
+/// ปุ่มขึ้นตามสถานะที่ server บอก ไม่ใช่สถานะที่แอปเดาเอง และหลังกดทุกครั้งจะอ่านกระเป๋าใหม่
+private struct QuestionLifecycleBar: View {
+    let questionID: UUID
+    @ObservedObject var chatStore: TestChatViewModel
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
+
+    @State private var isWorking = false
+
+    var body: some View {
+        if let status = supabaseApp.status(ofQuestion: questionID) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(headline(for: status))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 10) {
+                    ForEach(actions(for: status), id: \.title) { action in
+                        Button {
+                            Task { await run(action.run) }
+                        } label: {
+                            Text(action.title)
+                                .font(.subheadline.weight(.semibold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(action.tint)
+                        .disabled(isWorking)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private struct LifecycleAction {
+        let title: String
+        let tint: Color
+        let run: () async -> Bool
+    }
+
+    private var isSeer: Bool { supabaseApp.signedInRole == .seer }
+
+    private func headline(for status: String) -> String {
+        switch status {
+        case "submitted":
+            return isSeer
+                ? appLanguage.text("Waiting for your first answer", "รอคุณตอบครั้งแรก")
+                : appLanguage.text("Coins are held until the seer answers", "เหรียญถูกกันไว้จนกว่าหมอดูจะตอบ")
+        case "active":
+            return isSeer
+                ? appLanguage.text("Close the job to receive your share", "ปิดงานเพื่อรับส่วนแบ่ง")
+                : appLanguage.text("Reading in progress", "กำลังปรึกษาอยู่")
+        case "close_requested":
+            return isSeer
+                ? appLanguage.text("Waiting for the customer to confirm", "รอผู้ถามยืนยันปิดงาน")
+                : appLanguage.text("The seer asked to close this job", "หมอดูขอปิดงานนี้")
+        case "completed":
+            return appLanguage.text("Closed. Coins have been settled.", "ปิดงานแล้ว เหรียญถูกจ่ายเรียบร้อย")
+        case "cancelled_refunded":
+            return appLanguage.text("Cancelled. Coins were refunded.", "ยกเลิกแล้ว เหรียญถูกคืนเรียบร้อย")
+        default:
+            return status
+        }
+    }
+
+    private func actions(for status: String) -> [LifecycleAction] {
+        switch (status, isSeer) {
+        case ("submitted", false):
+            return [LifecycleAction(
+                title: appLanguage.text("Cancel and refund", "ยกเลิกและรับเหรียญคืน"),
+                tint: .red,
+                run: { await supabaseApp.cancelQuestion(questionID: questionID, chatStore: chatStore) }
+            )]
+        case ("active", true):
+            return [LifecycleAction(
+                title: appLanguage.text("Ask to close", "ขอปิดงาน"),
+                tint: .accentColor,
+                run: { await supabaseApp.requestClose(questionID: questionID, chatStore: chatStore) }
+            )]
+        case ("close_requested", false):
+            return [
+                LifecycleAction(
+                    title: appLanguage.text("Confirm and pay", "ยืนยันปิดงาน"),
+                    tint: .green,
+                    run: { await supabaseApp.respondClose(questionID: questionID, accept: true, chatStore: chatStore) }
+                ),
+                LifecycleAction(
+                    title: appLanguage.text("Not yet", "ยังไม่ปิด"),
+                    tint: .gray,
+                    run: { await supabaseApp.respondClose(questionID: questionID, accept: false, chatStore: chatStore) }
+                )
+            ]
+        default:
+            return []
+        }
+    }
+
+    private func run(_ operation: @escaping () async -> Bool) async {
+        isWorking = true
+        _ = await operation()
+        isWorking = false
+    }
+}
+
 private struct MockChatDetailView: View {
     let conversationID: UUID
     @ObservedObject var chatStore: TestChatViewModel
@@ -1321,6 +1433,13 @@ private struct MockChatDetailView: View {
                     scrollToLatestMessage(with: proxy)
                 }
             }
+
+            QuestionLifecycleBar(
+                questionID: conversationID,
+                chatStore: chatStore,
+                supabaseApp: supabaseApp,
+                appLanguage: appLanguage
+            )
 
             ChatComposer(
                 draft: $draft,
@@ -2044,20 +2163,33 @@ private final class SupabaseAppViewModel: ObservableObject {
     @Published private(set) var isConnected = false
     @Published private(set) var statusMessage: String
     @Published private(set) var walletAvailableCoin: Int?
+    @Published private(set) var walletReservedCoin: Int?
+    @Published private(set) var walletPayableCoin: Int?
     @Published private(set) var seers: [CustomerSeer] = []
     @Published private(set) var coinPackages: [WalletTopUpOption] = []
+    /// เซิร์ฟเวอร์อนุญาตให้เติมเหรียญแบบ dev ไหม — **แอปไม่เดาเอง** เพราะเงื่อนไขอยู่สองที่
+    /// ที่ client มองไม่เห็นทั้งคู่ (ดู `SupabaseDevTopUpAvailability`)
+    @Published private(set) var isDevTopUpAvailable = false
+    /// สถานะล่าสุดของคำถามแต่ละใบ (submitted / active / close_requested / completed / cancelled_refunded)
+    @Published private(set) var questionStatuses: [UUID: String] = [:]
 
     private let service: SupabaseHoroDataService?
+    private let realtime: ChataRealtime?
+    /// chat store ที่ผูกอยู่ ณ ตอนนี้ — เก็บไว้ให้ realtime เรียกรีเฟรชได้เองโดยไม่ต้องส่งผ่านทุกครั้ง
+    private weak var boundChatStore: TestChatViewModel?
     private var signedInAccountID: UUID?
-    private var signedInRole: OperationRole?
+    @Published private(set) var signedInRole: OperationRole?
 
     init(configuration: SupabaseConfiguration? = .runtime) {
         if let configuration {
-            service = SupabaseHoroDataService(configuration: configuration)
+            let service = SupabaseHoroDataService(configuration: configuration)
+            self.service = service
+            realtime = ChataRealtime(configuration: configuration, auth: service.auth)
             isConfigured = true
             statusMessage = "Supabase settings loaded. Login will test the live database."
         } else {
             service = nil
+            realtime = nil
             isConfigured = false
             statusMessage = "Local mock mode. Add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to connect Supabase."
         }
@@ -2074,18 +2206,21 @@ private final class SupabaseAppViewModel: ObservableObject {
         let resolvedPassword = cleanPassword.isEmpty ? service.configuration.testPassword : cleanPassword
 
         do {
-            let session = try await service.signIn(email: testAccount.email, password: resolvedPassword)
+            let userID = try await service.signIn(email: testAccount.email, password: resolvedPassword)
             let account = try await service.fetchAccount()
 
-            signedInAccountID = session.userID
+            signedInAccountID = userID
             signedInRole = testAccount.role
+            boundChatStore = chatStore
             isConnected = true
             statusMessage = "Supabase connected as \(account.role.rawValue)."
 
             await refreshWallet()
             await refreshSeers()
             await refreshCoinPackages()
+            await refreshDevTopUpAvailability()
             await refreshConversations(chatStore: chatStore)
+            await startRealtime()
 
             return walletAvailableCoin
         } catch {
@@ -2094,6 +2229,9 @@ private final class SupabaseAppViewModel: ObservableObject {
             return nil
         }
     }
+
+    /// คำถามที่ส่งไม่สำเร็จและยังรอ retry — เก็บไว้เพื่อคง idempotency key เดิม
+    private var pendingQuestionDraft: SupabaseQuestionDraft?
 
     func startQuestion(with seer: CustomerSeer, firstMessage: String, chatStore: TestChatViewModel) async -> Bool {
         guard let service, isConnected else {
@@ -2106,14 +2244,20 @@ private final class SupabaseAppViewModel: ObservableObject {
             return false
         }
 
+        // ใช้ draft เดิมถ้าคำถามนี้เคยส่งแล้วไม่สำเร็จ — key เดิมทำให้ยิงซ้ำไม่หักเหรียญรอบสอง
+        let draft = QuestionDraftPolicy.draft(
+            reusing: pendingQuestionDraft,
+            seerServiceID: serviceID,
+            message: firstMessage
+        )
+        pendingQuestionDraft = draft
+
         do {
-            _ = try await service.submitQuestion(
-                SupabaseQuestionDraft(
-                    seerServiceID: serviceID,
-                    firstMessage: firstMessage
-                )
-            )
-            statusMessage = "Question submitted to Supabase."
+            let submitted = try await service.submitQuestion(draft)
+            pendingQuestionDraft = nil
+            statusMessage = submitted.replayed
+                ? "คำถามนี้ส่งไปแล้ว ไม่ได้หักเหรียญซ้ำ"
+                : "Question submitted to Supabase."
             await refreshWallet()
             await refreshConversations(chatStore: chatStore)
             return true
@@ -2160,8 +2304,12 @@ private final class SupabaseAppViewModel: ObservableObject {
         do {
             let wallet = try await service.fetchWallet()
             walletAvailableCoin = wallet.availableCoin
+            walletReservedCoin = wallet.reservedCoin
+            walletPayableCoin = wallet.payableCoin
         } catch {
             walletAvailableCoin = nil
+            walletReservedCoin = nil
+            walletPayableCoin = nil
         }
     }
 
@@ -2190,15 +2338,122 @@ private final class SupabaseAppViewModel: ObservableObject {
             coinPackages = packages.map { package in
                 WalletTopUpOption(
                     id: package.code,
-                    coins: package.coinAmount + package.bonusCoin,
+                    coins: package.totalCoin,
                     priceLabel: "\(package.currency) \(package.priceMinor / 100)",
                     subtitle: package.allowedMethods.isEmpty
                         ? "Supabase coin package"
-                        : "Accepts \(package.allowedMethods.joined(separator: ", "))"
+                        : "Accepts \(package.allowedMethods.joined(separator: ", "))",
+                    appleProductID: package.appleProductID
                 )
             }
         } catch {
             coinPackages = []
+        }
+    }
+
+    /// ถามเซิร์ฟเวอร์ว่าเปิดให้เติมแบบ dev ไหม — ถามไม่ได้ให้ถือว่าไม่เปิด
+    /// (ปุ่มไม่โผล่ ดีกว่าโผล่แล้วกดไม่ได้)
+    func refreshDevTopUpAvailability() async {
+        guard let service else {
+            isDevTopUpAvailable = false
+            return
+        }
+
+        do {
+            isDevTopUpAvailable = try await service.fetchDevTopUpAvailability().isAllowed
+        } catch {
+            isDevTopUpAvailable = false
+        }
+    }
+
+    /// เติมเหรียญแบบ dev แล้ว**อ่านยอดใหม่จากเซิร์ฟเวอร์** ไม่บวกยอดในเครื่องเอง
+    /// คืน `nil` เมื่อสำเร็จ หรือข้อความเหตุผลเมื่อไม่สำเร็จ
+    func redeemDevTopUp(_ option: WalletTopUpOption) async -> String? {
+        guard let service, isConnected else {
+            return "ยังไม่ได้เชื่อมต่อ Supabase"
+        }
+
+        guard let productID = option.appleProductID else {
+            return "แพ็กนี้ยังไม่ได้ผูก product id ของ App Store"
+        }
+
+        do {
+            try await service.redeemDevTopUp(appleProductID: productID)
+            await refreshWallet()
+            return nil
+        } catch {
+            // เซิร์ฟเวอร์อาจเพิ่งสลับโหมด — ถามใหม่เพื่อให้ปุ่มหายเองถ้าไม่อนุญาตแล้ว
+            await refreshDevTopUpAvailability()
+            return error.localizedDescription
+        }
+    }
+
+
+
+    /// เปิดท่อ realtime หลัง login — ข้อความใหม่/สถานะเปลี่ยน จะรีเฟรชเองโดยผู้ใช้ไม่ต้องดึงลง
+    private func startRealtime() async {
+        await realtime?.start { [weak self] in
+            await self?.reloadAfterRemoteChange()
+        }
+    }
+
+    func stopRealtime() async {
+        await realtime?.stop()
+        boundChatStore = nil
+    }
+
+    private func reloadAfterRemoteChange() async {
+        guard let boundChatStore else { return }
+        await refreshWallet()
+        await refreshConversations(chatStore: boundChatStore)
+    }
+
+    /// สถานะของคำถามใบนี้เท่าที่ server บอกล่าสุด
+    func status(ofQuestion id: UUID) -> String? {
+        questionStatuses[id]
+    }
+
+    /// หมอดูขอปิดงาน
+    func requestClose(questionID: UUID, chatStore: TestChatViewModel) async -> Bool {
+        await runLifecycle(chatStore: chatStore) { service in
+            try await service.requestCloseQuestion(id: questionID)
+        }
+    }
+
+    /// ผู้ใช้ตอบคำขอปิดงาน — accept = true คือจุดที่เหรียญเข้ากระเป๋าหมอดูจริง
+    func respondClose(questionID: UUID, accept: Bool, chatStore: TestChatViewModel) async -> Bool {
+        await runLifecycle(chatStore: chatStore) { service in
+            try await service.respondCloseQuestion(id: questionID, accept: accept)
+        }
+    }
+
+    /// ผู้ใช้ยกเลิกคำถามที่หมอดูยังไม่ตอบ — ได้เหรียญคืนเต็ม
+    func cancelQuestion(questionID: UUID, chatStore: TestChatViewModel) async -> Bool {
+        await runLifecycle(chatStore: chatStore) { service in
+            try await service.cancelQuestion(id: questionID)
+        }
+    }
+
+    private func runLifecycle(
+        chatStore: TestChatViewModel,
+        _ operation: (SupabaseHoroDataService) async throws -> SupabaseQuestionLifecycle
+    ) async -> Bool {
+        guard let service, isConnected else {
+            statusMessage = "Supabase is not connected."
+            return false
+        }
+
+        do {
+            let result = try await operation(service)
+            statusMessage = result.replayed == true
+                ? "ทำรายการนี้ไปแล้ว สถานะตอนนี้คือ \(result.status)"
+                : "อัปเดตงานเป็น \(result.status) แล้ว"
+            await refreshWallet()
+            await refreshConversations(chatStore: chatStore)
+            return true
+        } catch {
+            statusMessage = "ทำรายการไม่สำเร็จ: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -2209,6 +2464,7 @@ private final class SupabaseAppViewModel: ObservableObject {
 
         do {
             let questions = try await service.fetchQuestions()
+            questionStatuses = Dictionary(uniqueKeysWithValues: questions.map { ($0.id, $0.status) })
             let conversations = await mapConversations(questions, service: service)
             chatStore.replaceConversations(conversations)
         } catch {
@@ -2423,6 +2679,7 @@ private struct CustomerHomeView: View {
                 CustomerHeroCard(
                     profile: profile,
                     coinBalance: supabaseApp.walletAvailableCoin ?? coinBalance,
+                    reservedCoin: supabaseApp.walletReservedCoin,
                     appLanguage: appLanguage,
                     onOpenChat: onOpenChat
                 )
@@ -2489,6 +2746,8 @@ private struct CustomerHomeView: View {
 private struct CustomerHeroCard: View {
     let profile: CustomerMockProfile
     let coinBalance: Int
+    /// เหรียญที่ถูกกันไว้ในงานที่ยังไม่ปิด — ต้องแสดงแยก ไม่งั้นผู้ใช้จะคิดว่าเหรียญหายไปเฉย ๆ
+    let reservedCoin: Int?
     let appLanguage: AppLanguage
     let onOpenChat: () -> Void
 
@@ -2520,6 +2779,13 @@ private struct CustomerHeroCard: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.orange)
                         .lineLimit(1)
+
+                    if let reservedCoin, reservedCoin > 0 {
+                        Text(appLanguage.text("· \(reservedCoin) held", "· กันไว้ \(reservedCoin)"))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.top, 2)
             }
@@ -3162,6 +3428,7 @@ private struct CustomerSeerProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $isAddFundsSheetPresented) {
             AddFundsSheet(
+                supabaseApp: supabaseApp,
                 coinBalance: $coinBalance,
                 reason: topUpReason.isEmpty ? appLanguage.text("Add THB to coins before starting a seer call.", "เติม THB เป็นเหรียญก่อนเริ่มโทรหาหมอดู") : topUpReason,
                 appLanguage: appLanguage
@@ -3558,6 +3825,13 @@ private struct CustomerChatDetailView: View {
                 }
             }
 
+            QuestionLifecycleBar(
+                questionID: conversationID,
+                chatStore: chatStore,
+                supabaseApp: supabaseApp,
+                appLanguage: appLanguage
+            )
+
             ChatComposer(
                 draft: $draft,
                 placeholder: appLanguage.text("Message seer", "ส่งข้อความถึงหมอดู"),
@@ -3698,6 +3972,8 @@ private struct CustomerProfileSpaceView: View {
     @Binding var appAppearance: AppAppearance
     @Binding var appLanguage: AppLanguage
 
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+
     let testAccount: TestAccount
 
     @Binding var coinBalance: Int
@@ -3801,6 +4077,7 @@ private struct CustomerProfileSpaceView: View {
         }
         .sheet(isPresented: $isAddFundsSheetPresented) {
             AddFundsSheet(
+                supabaseApp: supabaseApp,
                 coinBalance: $coinBalance,
                 reason: appLanguage.text("Add THB to get coins for readings and seer calls.", "เติม THB เพื่อรับเหรียญสำหรับคำทำนายและการโทรหาหมอดู"),
                 appLanguage: appLanguage
@@ -3848,6 +4125,7 @@ private struct CustomerWalletSection: View {
 }
 
 private struct AddFundsSheet: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
     @Binding var coinBalance: Int
 
     let reason: String
@@ -3857,6 +4135,9 @@ private struct AddFundsSheet: View {
     @State private var selectedOption = WalletTopUpOption.options[1]
     @State private var selectedMethod: MockPaymentMethod = .applePay
     @State private var didCompletePayment = false
+    @State private var pendingProductID: String?
+    @State private var devTopUpStatus: String?
+    @State private var devTopUpFailure: String?
 
     var body: some View {
         NavigationStack {
@@ -3887,58 +4168,11 @@ private struct AddFundsSheet: View {
                     .padding(16)
                     .cardStyle(borderColor: Color.orange.opacity(0.34))
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: appLanguage.text("Top Up", "เติมเงิน"), subtitle: appLanguage.text("Pay THB and receive in-app coins", "ชำระ THB แล้วรับเหรียญในแอป"))
-
-                        LazyVStack(spacing: 10) {
-                            ForEach(WalletTopUpOption.options) { option in
-                                Button {
-                                    selectedOption = option
-                                } label: {
-                                    WalletTopUpOptionRow(
-                                        option: option,
-                                        isSelected: selectedOption == option,
-                                        appLanguage: appLanguage
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
+                    if supabaseApp.isDevTopUpAvailable {
+                        devTopUpSection
+                    } else {
+                        mockPaymentSection
                     }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        SectionHeader(title: appLanguage.text("Payment", "การชำระเงิน"), subtitle: appLanguage.text("Mock payment method", "วิธีชำระเงินทดสอบ"))
-
-                        LazyVStack(spacing: 10) {
-                            ForEach(MockPaymentMethod.allCases) { method in
-                                Button {
-                                    selectedMethod = method
-                                } label: {
-                                    MockPaymentMethodRow(
-                                        method: method,
-                                        isSelected: selectedMethod == method,
-                                        appLanguage: appLanguage
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    Button(action: completePayment) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "lock.fill")
-                            Text(appLanguage.text("Pay \(selectedOption.priceLabel)", "ชำระ \(selectedOption.priceLabel)"))
-                            HoroCoinIcon(size: 18)
-                            Text(appLanguage.text("+\(selectedOption.coins) coins", "+\(selectedOption.coins) เหรียญ"))
-                        }
-                        .font(.headline)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
                 }
                 .padding(16)
                 .padding(.bottom, 8)
@@ -3961,7 +4195,140 @@ private struct AddFundsSheet: View {
             } message: {
                 Text(appLanguage.text("\(selectedOption.coins) coins were added after paying \(selectedOption.priceLabel) with \(selectedMethod.title(in: appLanguage)).", "เพิ่ม \(selectedOption.coins) เหรียญหลังชำระ \(selectedOption.priceLabel) ด้วย \(selectedMethod.title(in: appLanguage))"))
             }
+            .alert(
+                appLanguage.text("Top Up Failed", "เติมเหรียญไม่สำเร็จ"),
+                isPresented: Binding(get: { devTopUpFailure != nil }, set: { if !$0 { devTopUpFailure = nil } })
+            ) {
+                Button(appLanguage.text("OK", "ตกลง"), role: .cancel) { devTopUpFailure = nil }
+            } message: {
+                Text(devTopUpFailure ?? "")
+            }
+            .task {
+                // ถามทุกครั้งที่เปิดแผ่นนี้ ไม่ใช่แค่ตอน login — โหมดฝั่งเซิร์ฟเวอร์เปลี่ยนได้ระหว่างทาง
+                await supabaseApp.refreshDevTopUpAvailability()
+            }
         }
+    }
+
+    /// เติมเหรียญจริงผ่าน Edge Function `verify-iap` โหมด `local_test`
+    /// แผ่นนี้โผล่เฉพาะตอนเซิร์ฟเวอร์บอกว่าอนุญาต จึงไม่มีทางไปโผล่บนเครื่องผู้ใช้จริง
+    @ViewBuilder
+    private var devTopUpSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: appLanguage.text("Developer Top Up", "เติมเหรียญโหมดนักพัฒนา"),
+                subtitle: appLanguage.text(
+                    "Credits real coins through verify-iap without an Apple receipt",
+                    "เติมเหรียญจริงผ่าน verify-iap โดยไม่ต้องมีใบเสร็จจาก Apple"
+                )
+            )
+
+            if supabaseApp.coinPackages.isEmpty {
+                Text(appLanguage.text("No coin packages are enabled on this server.", "เซิร์ฟเวอร์นี้ยังไม่มีแพ็กเหรียญที่เปิดใช้งาน"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(supabaseApp.coinPackages) { option in
+                        Button {
+                            Task { await redeem(option) }
+                        } label: {
+                            WalletTopUpOptionRow(
+                                option: option,
+                                isSelected: pendingProductID != nil && pendingProductID == option.appleProductID,
+                                appLanguage: appLanguage
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(pendingProductID != nil)
+                    }
+                }
+            }
+
+            if let devTopUpStatus {
+                Text(devTopUpStatus)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// แผ่นชำระเงินจำลองของเดิม — ยังไม่แตะเงินจริงเลย ใช้ตอนแอปอยู่โหมด mock
+    @ViewBuilder
+    private var mockPaymentSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: appLanguage.text("Top Up", "เติมเงิน"), subtitle: appLanguage.text("Pay THB and receive in-app coins", "ชำระ THB แล้วรับเหรียญในแอป"))
+
+            LazyVStack(spacing: 10) {
+                ForEach(WalletTopUpOption.options) { option in
+                    Button {
+                        selectedOption = option
+                    } label: {
+                        WalletTopUpOptionRow(
+                            option: option,
+                            isSelected: selectedOption == option,
+                            appLanguage: appLanguage
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: appLanguage.text("Payment", "การชำระเงิน"), subtitle: appLanguage.text("Mock payment method", "วิธีชำระเงินทดสอบ"))
+
+            LazyVStack(spacing: 10) {
+                ForEach(MockPaymentMethod.allCases) { method in
+                    Button {
+                        selectedMethod = method
+                    } label: {
+                        MockPaymentMethodRow(
+                            method: method,
+                            isSelected: selectedMethod == method,
+                            appLanguage: appLanguage
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+
+        Button(action: completePayment) {
+            HStack(spacing: 8) {
+                Image(systemName: "lock.fill")
+                Text(appLanguage.text("Pay \(selectedOption.priceLabel)", "ชำระ \(selectedOption.priceLabel)"))
+                HoroCoinIcon(size: 18)
+                Text(appLanguage.text("+\(selectedOption.coins) coins", "+\(selectedOption.coins) เหรียญ"))
+            }
+            .font(.headline)
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+    }
+
+    private func redeem(_ option: WalletTopUpOption) async {
+        pendingProductID = option.appleProductID
+        devTopUpStatus = appLanguage.text("Calling verify-iap…", "กำลังเรียก verify-iap…")
+
+        let failure = await supabaseApp.redeemDevTopUp(option)
+        pendingProductID = nil
+
+        if let failure {
+            devTopUpStatus = nil
+            devTopUpFailure = failure
+            return
+        }
+
+        // ยอดต้องมาจากเซิร์ฟเวอร์ ไม่ใช่บวกเองในเครื่อง — ไม่งั้นหน้าจอโกหกได้เมื่อ server คิดไม่ตรง
+        coinBalance = supabaseApp.walletAvailableCoin ?? coinBalance
+        devTopUpStatus = appLanguage.text(
+            "Added \(option.coins) coins. Balance re-read from the server.",
+            "เพิ่ม \(option.coins) เหรียญแล้ว — อ่านยอดใหม่จากเซิร์ฟเวอร์"
+        )
     }
 
     private func completePayment() {
@@ -4009,6 +4376,9 @@ private struct WalletTopUpOption: Identifiable, Equatable {
     let coins: Int
     let priceLabel: String
     let subtitle: String
+    /// product id ฝั่ง App Store — มีเฉพาะแพ็กที่มาจากตาราง `coin_package` จริง
+    /// แพ็กตัวอย่างที่ hardcode ไว้ด้านล่างไม่มี จึงเติมผ่าน verify-iap ไม่ได้
+    let appleProductID: String?
 
     func subtitle(in language: AppLanguage) -> String {
         switch id {
@@ -4028,19 +4398,22 @@ private struct WalletTopUpOption: Identifiable, Equatable {
             id: "starter",
             coins: 200,
             priceLabel: "THB 200",
-            subtitle: "Starter coin pack for short calls"
+            subtitle: "Starter coin pack for short calls",
+            appleProductID: nil
         ),
         WalletTopUpOption(
             id: "popular",
             coins: 500,
             priceLabel: "THB 500",
-            subtitle: "Popular coin pack for chat and 30 min calls"
+            subtitle: "Popular coin pack for chat and 30 min calls",
+            appleProductID: nil
         ),
         WalletTopUpOption(
             id: "deep",
             coins: 1_000,
             priceLabel: "THB 1,000",
-            subtitle: "Deep reading coin pack for longer sessions"
+            subtitle: "Deep reading coin pack for longer sessions",
+            appleProductID: nil
         )
     ]
 }
@@ -4469,6 +4842,8 @@ private struct CustomerConversation: Identifiable {
 
 private struct DashboardPageView: View {
     let profile: UserProfile
+    /// ยอดค้างจ่ายของหมอดู — ขึ้นเมื่องานปิดแล้วเงินออกจาก escrow มาถึงเขาจริง
+    let payableCoin: Int?
     let records: [TestRecord]
     let totalCount: Int
     let activeCount: Int
@@ -4488,6 +4863,7 @@ private struct DashboardPageView: View {
             VStack(spacing: 18) {
                 SeerDashboardHeader(
                     profile: profile,
+                    payableCoin: payableCoin,
                     activeCount: activeCount,
                     appLanguage: appLanguage,
                     onViewProfile: onViewProfile
@@ -4536,6 +4912,7 @@ private struct DashboardPageView: View {
 
 private struct SeerDashboardHeader: View {
     let profile: UserProfile
+    let payableCoin: Int?
     let activeCount: Int
     let appLanguage: AppLanguage
     let onViewProfile: () -> Void
@@ -4566,6 +4943,17 @@ private struct SeerDashboardHeader: View {
                             .font(.caption.weight(.medium))
                     }
                     .foregroundStyle(.teal)
+
+                    if let payableCoin {
+                        HStack(spacing: 5) {
+                            HoroCoinIcon(size: 14)
+
+                            Text(appLanguage.text("\(payableCoin) coins payable", "ยอดค้างจ่าย \(payableCoin) เหรียญ"))
+                                .font(.caption.weight(.bold))
+                        }
+                        .foregroundStyle(.orange)
+                        .padding(.top, 2)
+                    }
                 }
 
                 Spacer(minLength: 8)
