@@ -512,5 +512,101 @@ else
 fi
 
 echo
+echo "── 9. บัญชีรับเงินของหมอดู + การตรวจ KYC"
+
+SAVE_ACC=$(api "$SEER_TOKEN" POST "rpc/set_payout_account" \
+  "{\"p_bank_code\":\"kbank\",\"p_account_number\":\"1234567890\",\"p_account_holder_name\":\"หมอดูทดสอบ\"}")
+ACC_ID=$(echo "$SAVE_ACC" | jq -r '.payout_account_id // empty')
+
+if [[ -z "$ACC_ID" ]]; then
+  bad "หมอดูบันทึกบัญชีรับเงินได้" "$SAVE_ACC"
+else
+  ok "หมอดูบันทึกบัญชีรับเงินได้"
+
+  MYACC=$(api "$SEER_TOKEN" GET "v_my_payout_account?select=bank_code,account_number_last4,verify_status,reject_reason")
+  LAST4=$(echo "$MYACC" | jq -r '.[0].account_number_last4 // empty')
+  VSTATUS=$(echo "$MYACC" | jq -r '.[0].verify_status // empty')
+
+  [[ "$LAST4" == "7890" && "$VSTATUS" == "pending" ]] \
+    && ok "หมอดูเห็นแค่ 4 ตัวท้าย ($LAST4) และสถานะรอตรวจ" \
+    || bad "หมอดูเห็นแค่ 4 ตัวท้ายและสถานะรอตรวจ" "$MYACC"
+
+  # เลขบัญชีเต็มต้องไม่มีทางอ่านได้จากฝั่ง client ไม่ว่าทางไหน
+  echo "$MYACC" | grep -q "1234567890" \
+    && bad "view ต้องไม่หลุดเลขบัญชีเต็ม" "$MYACC" \
+    || ok "view ไม่หลุดเลขบัญชีเต็ม"
+
+  RAW=$(api "$SEER_TOKEN" GET "payout_account?select=account_number")
+  echo "$RAW" | grep -q "1234567890" \
+    && bad "อ่านตาราง payout_account ตรง ๆ ต้องไม่ได้เลขบัญชี" "$RAW" \
+    || ok "อ่านตาราง payout_account ตรง ๆ ไม่ได้เลขบัญชี"
+
+  OUT_ACC=$(api "$OUTSIDER_TOKEN" GET "v_my_payout_account?select=account_number_last4" | jq -r 'if type == "array" then length else "ไม่ใช่อาเรย์: " + tostring end')
+  [[ "$OUT_ACC" == "0" ]] \
+    && ok "คนอื่นอ่านบัญชีรับเงินของหมอดูไม่เห็น (อาเรย์ว่าง)" \
+    || bad "คนอื่นอ่านบัญชีรับเงินของหมอดูไม่เห็น" "ได้ $OUT_ACC"
+
+  # ผู้ใช้ทั่วไปต้องเรียกคำสั่งแอดมินไม่ได้
+  ADMIN_BY_USER=$(api "$USER_TOKEN" POST "rpc/admin_review_payout_account" \
+    "{\"p_payout_account_id\":\"$ACC_ID\",\"p_approve\":true,\"p_reviewer_label\":\"แอบทำ\"}")
+  ADMIN_CODE=$(echo "$ADMIN_BY_USER" | jq -r '.code // "ไม่มี code"')
+  [[ "$ADMIN_CODE" == "42501" ]] \
+    && ok "ผู้ใช้ทั่วไปเรียกคำสั่งตรวจบัญชีไม่ได้ (42501)" \
+    || bad "ผู้ใช้ทั่วไปเรียกคำสั่งตรวจบัญชีไม่ได้ ต้องได้ 42501" "ได้ '$ADMIN_CODE' · $ADMIN_BY_USER"
+
+  if (( IS_LOCAL )); then
+    # แอดมินปฏิเสธพร้อมเหตุผล
+    docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select public.admin_review_payout_account('$ACC_ID'::uuid, false, 'แอดมินทดสอบ', 'ชื่อบัญชีไม่ตรงกับบัตรประชาชน')" >/dev/null 2>&1
+
+    AFTER_REJECT=$(api "$SEER_TOKEN" GET "v_my_payout_account?select=verify_status,reject_reason")
+    R_STATUS=$(echo "$AFTER_REJECT" | jq -r '.[0].verify_status // empty')
+    R_REASON=$(echo "$AFTER_REJECT" | jq -r '.[0].reject_reason // empty')
+
+    [[ "$R_STATUS" == "rejected" && -n "$R_REASON" ]] \
+      && ok "ถูกปฏิเสธแล้วหมอดูเห็นเหตุผล ('$R_REASON')" \
+      || bad "ถูกปฏิเสธแล้วหมอดูต้องเห็นเหตุผล" "$AFTER_REJECT"
+
+    AUDIT=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select count(*) from public.audit_log where target_type = 'payout_account' and target_id = '$ACC_ID'" 2>/dev/null)
+    [[ "$AUDIT" -ge 1 ]] 2>/dev/null \
+      && ok "การตรวจของแอดมินถูกบันทึกไว้ใน audit ($AUDIT รายการ)" \
+      || bad "การตรวจของแอดมินต้องถูกบันทึกใน audit" "นับได้ '$AUDIT'"
+
+    # แอดมินอ่านเลขบัญชีเต็มได้ แต่ต้องทิ้งร่องรอยไว้ทุกครั้ง
+    AUDIT_BEFORE=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select count(*) from public.audit_log where action = 'payout_account.revealed'" 2>/dev/null)
+    FULL=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select public.admin_reveal_payout_account('$ACC_ID'::uuid, 'แอดมินทดสอบ') ->> 'account_number'" 2>/dev/null)
+    AUDIT_AFTER=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select count(*) from public.audit_log where action = 'payout_account.revealed'" 2>/dev/null)
+
+    [[ "$FULL" == "1234567890" ]] \
+      && ok "แอดมินอ่านเลขบัญชีเต็มได้ผ่านคำสั่งเฉพาะ" \
+      || bad "แอดมินอ่านเลขบัญชีเต็มได้ผ่านคำสั่งเฉพาะ" "ได้ '$FULL'"
+
+    (( AUDIT_AFTER > AUDIT_BEFORE )) \
+      && ok "ทุกครั้งที่เปิดดูเลขบัญชีถูกบันทึกไว้ (${AUDIT_BEFORE}→$AUDIT_AFTER)" \
+      || bad "การเปิดดูเลขบัญชีต้องถูกบันทึกไว้" "${AUDIT_BEFORE}→$AUDIT_AFTER"
+  else
+    echo "  ⏭  ข้ามส่วนของแอดมิน (เรียก RPC ที่เป็นของ service_role บน remote ตรง ๆ ไม่ได้)"
+  fi
+
+  # แก้บัญชีแล้วต้องกลับไปรอตรวจใหม่ ไม่ใช่ยังผ่านอยู่ด้วยข้อมูลใหม่ที่ยังไม่มีใครดู
+  api "$SEER_TOKEN" POST "rpc/set_payout_account" \
+    "{\"p_bank_code\":\"scb\",\"p_account_number\":\"9876543210\",\"p_account_holder_name\":\"หมอดูทดสอบ\"}" >/dev/null
+  REEDIT=$(api "$SEER_TOKEN" GET "v_my_payout_account?select=bank_code,account_number_last4,verify_status")
+  [[ "$(echo "$REEDIT" | jq -r '.[0].verify_status')" == "pending" \
+     && "$(echo "$REEDIT" | jq -r '.[0].account_number_last4')" == "3210" ]] \
+    && ok "แก้บัญชีแล้วกลับไปรอตรวจใหม่เอง" \
+    || bad "แก้บัญชีแล้วต้องกลับไปรอตรวจใหม่" "$REEDIT"
+
+  ACTIVE_COUNT=$(api "$SEER_TOKEN" GET "v_my_payout_account?select=bank_code" | jq -r 'if type == "array" then length else "ไม่ใช่อาเรย์" end')
+  [[ "$ACTIVE_COUNT" == "1" ]] \
+    && ok "หมอดูมีบัญชีรับเงินที่ใช้งานอยู่ทีละหนึ่ง" \
+    || bad "หมอดูต้องมีบัญชีรับเงินที่ใช้งานอยู่ทีละหนึ่ง" "ได้ $ACTIVE_COUNT"
+fi
+
+echo
 echo "── สรุป: ผ่าน $PASS · ไม่ผ่าน $FAIL"
 [[ $FAIL -eq 0 ]]

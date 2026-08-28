@@ -169,6 +169,7 @@ private struct SeerWorkspaceView: View {
                     profile: profileViewModel.profile,
                     payableCoin: supabaseApp.walletPayableCoin,
                     earnings: supabaseApp.seerEarnings,
+                    supabaseApp: supabaseApp,
                     records: recordViewModel.records,
                     totalCount: recordViewModel.totalCount,
                     activeCount: recordViewModel.activeCount,
@@ -2173,6 +2174,9 @@ private final class SupabaseAppViewModel: ObservableObject {
     @Published private(set) var isDevTopUpAvailable = false
     /// รายได้รายก้อนของหมอดู — ยอดรวมบอกไม่ได้ว่าเงินมาจากงานไหน
     @Published private(set) var seerEarnings: [SupabaseSeerEarning] = []
+    /// บัญชีรับเงิน — ยังไม่ผูกหรือยังไม่ผ่านการตรวจ = ถอนเงินไม่ได้
+    @Published private(set) var payoutAccount: SupabasePayoutAccount?
+    @Published private(set) var payoutBankCodes: [String] = []
     /// สถานะล่าสุดของคำถามแต่ละใบ (submitted / active / close_requested / completed / cancelled_refunded)
     @Published private(set) var questionStatuses: [UUID: String] = [:]
 
@@ -2223,6 +2227,7 @@ private final class SupabaseAppViewModel: ObservableObject {
             await refreshCoinPackages()
             await refreshDevTopUpAvailability()
             await refreshSeerEarnings()
+            await refreshPayoutAccount()
             await refreshConversations(chatStore: chatStore)
             await startRealtime()
 
@@ -2366,6 +2371,36 @@ private final class SupabaseAppViewModel: ObservableObject {
             seerEarnings = try await service.fetchSeerEarnings()
         } catch {
             seerEarnings = []
+        }
+    }
+
+    /// บัญชีรับเงิน + รายชื่อธนาคาร — โหลดเฉพาะฝั่งหมอดู
+    func refreshPayoutAccount() async {
+        guard let service, signedInRole == .seer else {
+            payoutAccount = nil
+            payoutBankCodes = []
+            return
+        }
+
+        payoutAccount = try? await service.fetchPayoutAccount()
+        payoutBankCodes = (try? await service.fetchPayoutBankCodes()) ?? []
+    }
+
+    /// คืน nil เมื่อสำเร็จ หรือข้อความเหตุผลเมื่อไม่สำเร็จ
+    func savePayoutAccount(bankCode: String, accountNumber: String, holderName: String) async -> String? {
+        guard let service, isConnected else {
+            return "ยังไม่ได้เชื่อมต่อ Supabase"
+        }
+
+        do {
+            payoutAccount = try await service.savePayoutAccount(
+                bankCode: bankCode,
+                accountNumber: accountNumber,
+                accountHolderName: holderName
+            )
+            return nil
+        } catch {
+            return error.localizedDescription
         }
     }
 
@@ -4860,6 +4895,187 @@ private struct CustomerConversation: Identifiable {
     ]
 }
 
+/// บัญชีรับเงินของหมอดู — สถานะการตรวจต้องเห็นชัด เพราะ "ยังไม่ผ่าน" = ยังถอนเงินไม่ได้
+private struct SeerPayoutAccountSection: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
+
+    @State private var isFormPresented = false
+
+    private var account: SupabasePayoutAccount? { supabaseApp.payoutAccount }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: appLanguage.text("Payout Account", "บัญชีรับเงิน"),
+                subtitle: appLanguage.text(
+                    "Where your earnings get transferred",
+                    "บัญชีที่จะโอนรายได้ของคุณเข้าไป"
+                )
+            )
+
+            Button {
+                isFormPresented = true
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let account {
+                            Text("\(account.bankCode.uppercased()) ····\(account.accountNumberLast4)")
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+
+                            Text(account.accountHolderName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            statusLine(for: account)
+                        } else {
+                            Text(appLanguage.text("No payout account yet", "ยังไม่ได้ผูกบัญชีรับเงิน"))
+                                .font(.subheadline.weight(.semibold))
+
+                            Text(appLanguage.text(
+                                "Add one before you can withdraw",
+                                "ต้องผูกบัญชีก่อนถึงจะถอนเงินได้"
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(16)
+                .cardStyle()
+            }
+            .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $isFormPresented) {
+            SeerPayoutAccountForm(supabaseApp: supabaseApp, appLanguage: appLanguage)
+        }
+        .task {
+            await supabaseApp.refreshPayoutAccount()
+        }
+    }
+
+    @ViewBuilder
+    private func statusLine(for account: SupabasePayoutAccount) -> some View {
+        switch account.verifyStatus {
+        case "verified":
+            Label(appLanguage.text("Verified", "ตรวจแล้ว ถอนเงินได้"), systemImage: "checkmark.seal.fill")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.green)
+        case "rejected":
+            VStack(alignment: .leading, spacing: 2) {
+                Label(appLanguage.text("Rejected", "ไม่ผ่านการตรวจ"), systemImage: "xmark.seal.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.red)
+
+                // เหตุผลต้องโชว์ ไม่งั้นหมอดูไม่รู้ว่าต้องแก้อะไร
+                if let reason = account.rejectReason {
+                    Text(reason)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        default:
+            Label(appLanguage.text("Waiting for review", "รอตรวจสอบ"), systemImage: "clock.fill")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.orange)
+        }
+    }
+}
+
+private struct SeerPayoutAccountForm: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var bankCode = ""
+    @State private var accountNumber = ""
+    @State private var holderName = ""
+    @State private var isSaving = false
+    @State private var failure: String?
+
+    private var canSave: Bool {
+        !bankCode.isEmpty && accountNumber.count >= 8 && !holderName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(appLanguage.text("Bank", "ธนาคาร")) {
+                    Picker(appLanguage.text("Bank", "ธนาคาร"), selection: $bankCode) {
+                        Text(appLanguage.text("Select", "เลือก")).tag("")
+                        ForEach(supabaseApp.payoutBankCodes, id: \.self) { code in
+                            Text(code.uppercased()).tag(code)
+                        }
+                    }
+                }
+
+                Section(appLanguage.text("Account", "บัญชี")) {
+                    TextField(appLanguage.text("Account number", "เลขที่บัญชี"), text: $accountNumber)
+                        .keyboardType(.numberPad)
+
+                    TextField(appLanguage.text("Account holder name", "ชื่อบัญชี"), text: $holderName)
+                }
+
+                Section {
+                    Text(appLanguage.text(
+                        "The name must match the ID you submitted. Changing the account sends it back for review.",
+                        "ชื่อบัญชีต้องตรงกับบัตรประชาชนที่ยื่นไว้ · แก้บัญชีแล้วจะกลับไปรอตรวจใหม่"
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle(appLanguage.text("Payout Account", "บัญชีรับเงิน"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(appLanguage.text("Cancel", "ยกเลิก")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(appLanguage.text("Save", "บันทึก")) {
+                        Task { await save() }
+                    }
+                    .disabled(!canSave || isSaving)
+                }
+            }
+            .alert(
+                appLanguage.text("Could not save", "บันทึกไม่สำเร็จ"),
+                isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
+            ) {
+                Button(appLanguage.text("OK", "ตกลง"), role: .cancel) { failure = nil }
+            } message: {
+                Text(failure ?? "")
+            }
+            .onAppear {
+                if let account = supabaseApp.payoutAccount {
+                    bankCode = account.bankCode
+                    holderName = account.accountHolderName
+                    // เลขบัญชีเดิมเติมให้ไม่ได้ — แอปไม่เคยได้รับเลขเต็มมาเลย ต้องพิมพ์ใหม่
+                }
+            }
+        }
+    }
+
+    private func save() async {
+        isSaving = true
+        defer { isSaving = false }
+
+        if let message = await supabaseApp.savePayoutAccount(
+            bankCode: bankCode, accountNumber: accountNumber, holderName: holderName
+        ) {
+            failure = message
+        } else {
+            dismiss()
+        }
+    }
+}
+
 /// รายการรายได้ของหมอดู — ตอบคำถาม "เงินก้อนนี้มาจากงานไหน หักไปเท่าไหร่"
 /// ซึ่งยอดค้างจ่ายก้อนเดียวตอบไม่ได้
 private struct SeerEarningSection: View {
@@ -4935,6 +5151,7 @@ private struct DashboardPageView: View {
     let payableCoin: Int?
     /// รายได้รายก้อน — ยอดค้างจ่ายอย่างเดียวบอกไม่ได้ว่าเงินมาจากงานไหน
     let earnings: [SupabaseSeerEarning]
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
     let records: [TestRecord]
     let totalCount: Int
     let activeCount: Int
@@ -4959,6 +5176,8 @@ private struct DashboardPageView: View {
                     appLanguage: appLanguage,
                     onViewProfile: onViewProfile
                 )
+
+                SeerPayoutAccountSection(supabaseApp: supabaseApp, appLanguage: appLanguage)
 
                 SeerEarningSection(earnings: earnings, appLanguage: appLanguage)
 

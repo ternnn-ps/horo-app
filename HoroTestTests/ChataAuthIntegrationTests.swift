@@ -243,4 +243,46 @@ final class ChataAuthIntegrationTests: XCTestCase {
 
         try? await seerService.signOut()
     }
+
+    /// หมอดูผูกบัญชีธนาคารแล้วต้องเห็นแค่ 4 ตัวท้าย — เลขเต็มห้ามกลับมาถึงแอปเลย
+    func testSeerBindsBankAccountAndOnlySeesLastFourDigits() async throws {
+        let seerService = SupabaseHoroDataService(configuration: configuration, authStorageKey: "chata-test-payout-seer")
+        _ = try await seerService.signIn(email: "seer@horo.test", password: "HoroTest123!")
+
+        let savedAccount = try await seerService.savePayoutAccount(
+            bankCode: "kbank", accountNumber: "1234567890", accountHolderName: "หมอดูทดสอบ"
+        )
+        let saved = try XCTUnwrap(savedAccount, "บันทึกแล้วต้องอ่านกลับมาได้")
+
+        XCTAssertEqual(saved.accountNumberLast4, "7890")
+        XCTAssertEqual(saved.bankCode, "kbank")
+        XCTAssertEqual(saved.verifyStatus, "pending", "บัญชีที่เพิ่งผูกต้องยังไม่ผ่านการตรวจ")
+        XCTAssertFalse(saved.isVerified, "ยังถอนเงินไม่ได้จนกว่าจะมีคนตรวจ")
+
+        // แก้แล้วต้องกลับไปรอตรวจใหม่ และ 4 ตัวท้ายเปลี่ยนตาม
+        let editedAccount = try await seerService.savePayoutAccount(
+            bankCode: "scb", accountNumber: "9876543210", accountHolderName: "หมอดูทดสอบ"
+        )
+        let edited = try XCTUnwrap(editedAccount)
+        XCTAssertEqual(edited.accountNumberLast4, "3210")
+        XCTAssertEqual(edited.bankCode, "scb")
+        XCTAssertEqual(edited.verifyStatus, "pending")
+
+        // ธนาคารที่ไม่มีในรายการต้องถูกปฏิเสธ ไม่ใช่บันทึกเงียบ ๆ
+        do {
+            _ = try await seerService.savePayoutAccount(
+                bankCode: "ไม่มีธนาคารนี้", accountNumber: "1111222233", accountHolderName: "หมอดูทดสอบ"
+            )
+            XCTFail("รหัสธนาคารที่ไม่รู้จักต้องถูกปฏิเสธ")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty, "ต้องมีเหตุผลให้ผู้ใช้อ่าน")
+        }
+
+        // ผู้ใช้ทั่วไปต้องไม่เห็นบัญชีของใครเลย
+        _ = try await service.signIn(email: "customer@horo.test", password: "HoroTest123!")
+        let asCustomer = try await service.fetchPayoutAccount()
+        XCTAssertNil(asCustomer, "ผู้ใช้ทั่วไปต้องไม่เห็นบัญชีรับเงินของหมอดู")
+
+        try? await seerService.signOut()
+    }
 }

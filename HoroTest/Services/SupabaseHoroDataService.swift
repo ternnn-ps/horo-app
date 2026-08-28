@@ -186,6 +186,28 @@ struct SupabaseDevTopUpReceipt: Decodable, Equatable {
 ///
 /// หน้าจอต้องเล่าได้ว่าเงินก้อนไหนมาจากงานอะไร ไม่ใช่มีแต่ยอดรวม
 /// และ **ระยะรอก่อนถอนได้คิดจาก `createdAt` ของแต่ละก้อน** ไม่ใช่จากยอดรวม
+/// บัญชีรับเงินของหมอดู — **ไม่มีฟิลด์เลขบัญชีเต็มโดยตั้งใจ**
+///
+/// view ฝั่งเซิร์ฟเวอร์ไม่ส่งมาให้ และ struct นี้ก็ไม่มีที่ให้ใส่
+/// ถ้าวันหนึ่งมีใครเผลอเปิด view ให้ส่งเลขเต็ม แอปก็ยังไม่เก็บมันไว้ในหน่วยความจำอยู่ดี
+struct SupabasePayoutAccount: Decodable, Equatable {
+    let bankCode: String
+    let accountNumberLast4: String
+    let accountHolderName: String
+    let verifyStatus: String
+    let rejectReason: String?
+
+    var isVerified: Bool { verifyStatus == "verified" }
+
+    enum CodingKeys: String, CodingKey {
+        case bankCode = "bank_code"
+        case accountNumberLast4 = "account_number_last4"
+        case accountHolderName = "account_holder_name"
+        case verifyStatus = "verify_status"
+        case rejectReason = "reject_reason"
+    }
+}
+
 struct SupabaseSeerEarning: Decodable, Equatable, Identifiable {
     let id: Int
     let sourceType: String
@@ -458,6 +480,52 @@ final class SupabaseHoroDataService {
     }
 
     /// รายได้ของหมอดูที่ login อยู่ — RLS คัดให้เองว่าเห็นเฉพาะของตัวเอง
+    /// รายชื่อธนาคารที่รับโอนได้ — อ่านจาก app_config เดียวกับที่เซิร์ฟเวอร์ใช้ตรวจ
+    /// ถ้า hardcode ไว้ในแอป วันที่เพิ่มธนาคารใหม่จะกลายเป็นว่าแอปเลือกไม่ได้แต่เซิร์ฟเวอร์รับ
+    func fetchPayoutBankCodes() async throws -> [String] {
+        let rows: [AppConfigRow] = try await request(
+            path: "rest/v1/app_config",
+            queryItems: [
+                URLQueryItem(name: "select", value: "value"),
+                URLQueryItem(name: "key", value: "eq.payout.bank_codes"),
+                URLQueryItem(name: "limit", value: "1")
+            ],
+            requiresSession: false
+        )
+        return rows.first?.value ?? []
+    }
+
+    /// บัญชีรับเงินที่ใช้งานอยู่ของหมอดูที่ login — คืน nil เมื่อยังไม่เคยผูก
+    func fetchPayoutAccount() async throws -> SupabasePayoutAccount? {
+        let rows: [SupabasePayoutAccount] = try await request(
+            path: "rest/v1/v_my_payout_account",
+            queryItems: [
+                URLQueryItem(name: "select", value: "bank_code,account_number_last4,account_holder_name,verify_status,reject_reason"),
+                URLQueryItem(name: "limit", value: "1")
+            ]
+        )
+        return rows.first
+    }
+
+    /// บันทึก/แก้บัญชีรับเงิน — แก้แล้วสถานะกลับไปรอตรวจเสมอ (เซิร์ฟเวอร์เป็นคนบังคับ)
+    @discardableResult
+    func savePayoutAccount(
+        bankCode: String,
+        accountNumber: String,
+        accountHolderName: String
+    ) async throws -> SupabasePayoutAccount? {
+        let _: SavePayoutAccountResponse = try await request(
+            path: "rest/v1/rpc/set_payout_account",
+            method: "POST",
+            body: SavePayoutAccountBody(
+                p_bank_code: bankCode,
+                p_account_number: accountNumber,
+                p_account_holder_name: accountHolderName
+            )
+        )
+        return try await fetchPayoutAccount()
+    }
+
     func fetchSeerEarnings() async throws -> [SupabaseSeerEarning] {
         try await request(
             path: "rest/v1/seer_earning",
@@ -698,6 +766,26 @@ private struct AuthTokenResponse: Decodable {
 private struct AuthUserResponse: Decodable {
     let id: String
     let email: String?
+}
+
+private struct AppConfigRow: Decodable {
+    let value: [String]
+}
+
+private struct SavePayoutAccountBody: Encodable {
+    let p_bank_code: String
+    let p_account_number: String
+    let p_account_holder_name: String
+}
+
+private struct SavePayoutAccountResponse: Decodable {
+    let payoutAccountID: String
+    let verifyStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case payoutAccountID = "payout_account_id"
+        case verifyStatus = "verify_status"
+    }
 }
 
 private struct DevTopUpRequestBody: Encodable {
