@@ -94,11 +94,19 @@ begin
     v_seer_coin := (v_q.price_coin * v_share_bps) / 10000;
     v_fee_coin  := v_q.price_coin - v_seer_coin;
 
+    -- ขาที่ผู้ใช้จ่ายออกมีเสมอ
     v_entries := jsonb_build_array(
       jsonb_build_object('ledger_account', 'user_reserved', 'account_id', v_q.user_id,
-                         'amount', -v_q.price_coin),
-      jsonb_build_object('ledger_account', 'seer_payable', 'account_id', v_q.seer_id,
-                         'amount', v_seer_coin));
+                         'amount', -v_q.price_coin));
+
+    -- ขาปลายทางใส่เฉพาะที่ไม่เป็นศูนย์ — ledger ห้ามมีแถว amount = 0
+    -- (การแก้จาก 20260827000003 — ราคาต่ำ ๆ ส่วนแบ่งจะปัดลงเป็น 0 แล้วทั้ง transaction ล้ม
+    --  ทำให้คำถามนั้นปิดไม่ได้ตลอดกาลและเหรียญค้างใน escrow)
+    if v_seer_coin > 0 then
+      v_entries := v_entries
+        || jsonb_build_object('ledger_account', 'seer_payable', 'account_id', v_q.seer_id,
+                              'amount', v_seer_coin);
+    end if;
     if v_fee_coin > 0 then
       v_entries := v_entries
         || jsonb_build_object('ledger_account', 'platform_revenue', 'account_id', null,
@@ -108,6 +116,7 @@ begin
     v_tx_id := public.internal_post_ledger('question', v_q.id::text, 'settle', v_entries);
 
     -- projection ต้องอยู่ในทรานแซกชันเดียวกับ ledger เสมอ
+    -- ส่วนแบ่งที่ปัดลงเป็น 0 ยังต้องมีรายการ (gross > 0 อยู่) เพื่อให้ประวัติรายได้ครบ
     insert into public.seer_earning
       (seer_id, source_type, source_id, gross_coin, seer_coin, revenue_share_bps, ledger_transaction_id)
     values
@@ -161,16 +170,18 @@ insert into public.seer_earning
   (seer_id, source_type, source_id, gross_coin, seer_coin, revenue_share_bps,
    ledger_transaction_id, created_at)
 select
-  e.account_id,
+  q.seer_id,
   'question',
   t.reference_id,
   q.price_coin,
-  e.amount,
-  (e.amount * 10000) / nullif(q.price_coin, 0),
+  coalesce(e.amount, 0),
+  (coalesce(e.amount, 0) * 10000) / nullif(q.price_coin, 0),
   t.id,
   t.created_at
 from public.ledger_transaction t
-join public.ledger_entry e
+-- left join เพราะ settle ที่ส่วนแบ่งปัดลงเป็น 0 จะ **ไม่มีขา seer_payable ใน ledger เลย**
+-- (ledger ห้ามแถว amount = 0) แต่ยังต้องมีรายการรายได้ไว้ให้ประวัติครบ
+left join public.ledger_entry e
   on e.transaction_id = t.id
  and e.ledger_account = 'seer_payable'
  and e.amount > 0

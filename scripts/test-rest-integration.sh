@@ -106,7 +106,8 @@ else
   ok "login ด้วยบัญชี fixture"
 
   WALLET=$(api "$USER_TOKEN" GET "v_my_wallet?select=available_coin,reserved_coin")
-  AVAILABLE=$(echo "$WALLET" | jq -r '.[0].available_coin // empty')
+  # 0 เป็นยอดที่ถูกต้อง — `// empty` จะทำให้กระเป๋าว่างถูกรายงานว่า "อ่านไม่ได้"
+  AVAILABLE=$(echo "$WALLET" | jq -r 'if type == "array" and length > 0 then (.[0].available_coin | tostring) else "" end')
 
   if [[ -z "$AVAILABLE" ]]; then
     bad "อ่าน v_my_wallet ได้" "$WALLET"
@@ -168,7 +169,9 @@ if [[ -n "${QUESTION_ID:-}" ]]; then
   REPLAY=$(api "$USER_TOKEN" POST "rpc/submit_question" \
     "{\"p_seer_service_id\":\"$SERVICE_ID\",\"p_first_message\":\"ทดสอบซื้อคำถามจาก REST\",\"p_client_message_id\":\"$MSG_ID\",\"p_client_request_id\":\"$REQ_ID\"}")
 
-  if [[ "$(echo "$REPLAY" | jq -r '.replayed // empty')" != "true" ]]; then
+  # ห้าม `// empty` กับ boolean — jq ถือว่า false เป็น falsy แล้วตกไปเป็นค่าว่าง
+  # แยกไม่ออกจากกรณีที่ไม่มีฟิลด์เลย ทำให้ข้อความบอกสาเหตุผิด
+  if [[ "$(echo "$REPLAY" | jq -r '.replayed')" != "true" ]]; then
     bad "ยิงซ้ำแล้วได้ replayed=true" "$REPLAY"
   elif [[ "$(echo "$REPLAY" | jq -r '.question_id')" != "$QUESTION_ID" ]]; then
     bad "ยิงซ้ำแล้วได้ question เดิม" "ได้ $(echo "$REPLAY" | jq -r '.question_id') แทน $QUESTION_ID"
@@ -207,10 +210,12 @@ OUTSIDER_TOKEN=$(login "$FIXTURE_OUTSIDER_EMAIL" "$FIXTURE_OUTSIDER_PASSWORD")
 if [[ -z "$OUTSIDER_TOKEN" || -z "${QUESTION_ID:-}" ]]; then
   bad "เตรียมบัญชีคนนอกได้" "ไม่มี token หรือไม่มีคำถามให้ทดสอบ"
 else
-  SEEN=$(api "$OUTSIDER_TOKEN" GET "question?id=eq.$QUESTION_ID&select=id" | jq -r 'length')
+  # ต้องยืนยันว่าเป็น "อาเรย์ว่าง" จริง ๆ — `length` บน error object นับ key ได้ ไม่ใช่ 0
+  # ข้อพวกนี้คือข้อที่พิสูจน์เรื่องสิทธิ์ ปล่อยให้คลุมเครือไม่ได้
+  SEEN=$(api "$OUTSIDER_TOKEN" GET "question?id=eq.$QUESTION_ID&select=id" | jq -r 'if type == "array" then length else "ไม่ใช่อาเรย์: " + tostring end')
   [[ "$SEEN" == "0" ]] && ok "คนนอกอ่าน question ไม่เห็น" || bad "คนนอกอ่าน question ไม่เห็น" "เห็น $SEEN แถว"
 
-  SEEN_MSG=$(api "$OUTSIDER_TOKEN" GET "question_message?question_id=eq.$QUESTION_ID&select=id" | jq -r 'length')
+  SEEN_MSG=$(api "$OUTSIDER_TOKEN" GET "question_message?question_id=eq.$QUESTION_ID&select=id" | jq -r 'if type == "array" then length else "ไม่ใช่อาเรย์: " + tostring end')
   [[ "$SEEN_MSG" == "0" ]] && ok "คนนอกอ่านข้อความไม่เห็น" || bad "คนนอกอ่านข้อความไม่เห็น" "เห็น $SEEN_MSG แถว"
 
   OUTSIDER_ID=$(curl -s "$SUPABASE_URL/auth/v1/user" -H "apikey: $ANON_KEY" \
