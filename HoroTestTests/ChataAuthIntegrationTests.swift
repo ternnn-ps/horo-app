@@ -285,4 +285,55 @@ final class ChataAuthIntegrationTests: XCTestCase {
 
         try? await seerService.signOut()
     }
+
+    /// หมอดูต้องเห็นว่าถอนได้เท่าไหร่ และขอเกินนั้นต้องไม่มีทางสำเร็จ
+    ///
+    /// ไม่ทดสอบการขอถอนที่สำเร็จในนี้ เพราะคำขอค้างได้ทีละรายการ — ถ้าทำ เทสจะขึ้นกับ
+    /// ลำดับว่าชุด REST รันไปแล้วหรือยัง สิ่งที่ทดสอบคือกฎที่จริงเสมอไม่ว่าสถานะจะเป็นยังไง
+    func testSeerCannotWithdrawMoreThanWhatIsWithdrawable() async throws {
+        let seerService = SupabaseHoroDataService(configuration: configuration, authStorageKey: "chata-test-withdraw-seer")
+        _ = try await seerService.signIn(email: "seer@horo.test", password: "HoroTest123!")
+
+        let fetchedSummary = try await seerService.fetchPayoutSummary()
+        let summary = try XCTUnwrap(fetchedSummary, "หมอดูต้องอ่านสรุปยอดถอนได้")
+
+        XCTAssertLessThanOrEqual(
+            summary.withdrawableCoin, summary.payableCoin,
+            "ยอดที่ถอนได้ต้องไม่เกินยอดค้างจ่ายจริง"
+        )
+        XCTAssertGreaterThan(summary.minCoin, 0, "ต้องมีขั้นต่ำมาจากเซิร์ฟเวอร์")
+        XCTAssertGreaterThan(summary.holdDays, 0, "ต้องมีระยะรอมาจากเซิร์ฟเวอร์")
+
+        // ตัวเลขที่จะโชว์ต้องมาจากเซิร์ฟเวอร์ ไม่ใช่แอปคูณเอง
+        let quote = try await seerService.previewPayout(coinAmount: summary.minCoin)
+        XCTAssertEqual(quote.coinAmount, summary.minCoin)
+        XCTAssertEqual(
+            quote.fiatAmountMinor,
+            quote.grossMinor - quote.feeMinor - quote.withholdingTaxMinor,
+            "ยอดสุทธิต้องเท่ากับยอดเต็มหักค่าธรรมเนียมและภาษี"
+        )
+
+        let payableBefore = try await seerService.fetchWallet().payableCoin
+
+        // ขอเกินยอดที่ถอนได้ ต้องล้มและเหรียญห้ามขยับ
+        do {
+            try await seerService.requestPayout(coinAmount: summary.withdrawableCoin + summary.minCoin + 1)
+            XCTFail("ขอเกินยอดที่ถอนได้ต้องไม่สำเร็จ")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty, "ต้องมีเหตุผลให้หมอดูอ่าน")
+        }
+
+        // ต่ำกว่าขั้นต่ำก็ต้องล้ม
+        do {
+            try await seerService.requestPayout(coinAmount: 1)
+            XCTFail("ต่ำกว่าขั้นต่ำต้องไม่สำเร็จ")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.isEmpty)
+        }
+
+        let payableAfter = try await seerService.fetchWallet().payableCoin
+        XCTAssertEqual(payableAfter, payableBefore, "คำขอที่ถูกปฏิเสธห้ามทำให้เหรียญขยับ")
+
+        try? await seerService.signOut()
+    }
 }

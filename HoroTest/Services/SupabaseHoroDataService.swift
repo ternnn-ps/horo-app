@@ -186,6 +186,72 @@ struct SupabaseDevTopUpReceipt: Decodable, Equatable {
 ///
 /// หน้าจอต้องเล่าได้ว่าเงินก้อนไหนมาจากงานอะไร ไม่ใช่มีแต่ยอดรวม
 /// และ **ระยะรอก่อนถอนได้คิดจาก `createdAt` ของแต่ละก้อน** ไม่ใช่จากยอดรวม
+/// สรุปยอดถอนของหมอดู — ตอบสองคำถามที่หน้าจอต้องการ:
+/// "ตอนนี้ถอนได้เท่าไหร่" และ "ที่เหลือจะถอนได้เมื่อไหร่"
+struct SupabasePayoutSummary: Decodable, Equatable {
+    let payableCoin: Int
+    let withdrawableCoin: Int
+    let pendingCoin: Int
+    let minCoin: Int
+    let holdDays: Int
+    let conversionRateMicro: Int
+    let nextMaturesAt: String?
+
+    /// ยอดที่มีแต่ยังถอนไม่ได้เพราะยังไม่พ้นระยะรอ
+    var heldCoin: Int { max(payableCoin - withdrawableCoin, 0) }
+    var canRequest: Bool { withdrawableCoin >= minCoin }
+
+    enum CodingKeys: String, CodingKey {
+        case payableCoin = "payable_coin"
+        case withdrawableCoin = "withdrawable_coin"
+        case pendingCoin = "pending_coin"
+        case minCoin = "min_coin"
+        case holdDays = "hold_days"
+        case conversionRateMicro = "conversion_rate_micro"
+        case nextMaturesAt = "next_matures_at"
+    }
+}
+
+/// ตัวเลขเงินของคำขอถอน — เซิร์ฟเวอร์คิดให้ทั้งตอน preview และตอนบันทึกจริง
+/// แอปไม่คำนวณเอง ไม่งั้นวันหนึ่งจะโชว์เลขหนึ่งแต่ถูกบันทึกอีกเลขหนึ่ง
+struct SupabasePayoutQuote: Decodable, Equatable {
+    let coinAmount: Int
+    let grossMinor: Int
+    let feeMinor: Int
+    let withholdingTaxMinor: Int
+    let fiatAmountMinor: Int
+    let currency: String
+
+    enum CodingKeys: String, CodingKey {
+        case coinAmount = "coin_amount"
+        case grossMinor = "gross_minor"
+        case feeMinor = "fee_minor"
+        case withholdingTaxMinor = "withholding_tax_minor"
+        case fiatAmountMinor = "fiat_amount_minor"
+        case currency
+    }
+}
+
+struct SupabasePayoutRequest: Decodable, Equatable, Identifiable {
+    let id: UUID
+    let coinAmount: Int
+    let fiatAmountMinor: Int
+    let status: String
+    let providerReference: String?
+    let rejectReason: String?
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case coinAmount = "coin_amount"
+        case fiatAmountMinor = "fiat_amount_minor"
+        case status
+        case providerReference = "provider_reference"
+        case rejectReason = "reject_reason"
+        case createdAt = "created_at"
+    }
+}
+
 /// บัญชีรับเงินของหมอดู — **ไม่มีฟิลด์เลขบัญชีเต็มโดยตั้งใจ**
 ///
 /// view ฝั่งเซิร์ฟเวอร์ไม่ส่งมาให้ และ struct นี้ก็ไม่มีที่ให้ใส่
@@ -480,6 +546,42 @@ final class SupabaseHoroDataService {
     }
 
     /// รายได้ของหมอดูที่ login อยู่ — RLS คัดให้เองว่าเห็นเฉพาะของตัวเอง
+    func fetchPayoutSummary() async throws -> SupabasePayoutSummary? {
+        let rows: [SupabasePayoutSummary] = try await request(
+            path: "rest/v1/v_my_payout_summary",
+            queryItems: [URLQueryItem(name: "select", value: "*"), URLQueryItem(name: "limit", value: "1")]
+        )
+        return rows.first
+    }
+
+    func fetchPayoutHistory() async throws -> [SupabasePayoutRequest] {
+        try await request(
+            path: "rest/v1/v_my_payout_history",
+            queryItems: [
+                URLQueryItem(name: "select", value: "id,coin_amount,fiat_amount_minor,status,provider_reference,reject_reason,created_at"),
+                URLQueryItem(name: "order", value: "created_at.desc")
+            ]
+        )
+    }
+
+    /// ถามเซิร์ฟเวอร์ว่าถอนเท่านี้จะได้เงินจริงเท่าไหร่ — ไม่มีผลข้างเคียง
+    func previewPayout(coinAmount: Int) async throws -> SupabasePayoutQuote {
+        try await request(
+            path: "rest/v1/rpc/preview_payout",
+            method: "POST",
+            body: PayoutAmountBody(p_coin_amount: coinAmount)
+        )
+    }
+
+    @discardableResult
+    func requestPayout(coinAmount: Int) async throws -> SupabasePayoutQuote {
+        try await request(
+            path: "rest/v1/rpc/request_payout",
+            method: "POST",
+            body: PayoutAmountBody(p_coin_amount: coinAmount)
+        )
+    }
+
     /// รายชื่อธนาคารที่รับโอนได้ — อ่านจาก app_config เดียวกับที่เซิร์ฟเวอร์ใช้ตรวจ
     /// ถ้า hardcode ไว้ในแอป วันที่เพิ่มธนาคารใหม่จะกลายเป็นว่าแอปเลือกไม่ได้แต่เซิร์ฟเวอร์รับ
     func fetchPayoutBankCodes() async throws -> [String] {
@@ -766,6 +868,10 @@ private struct AuthTokenResponse: Decodable {
 private struct AuthUserResponse: Decodable {
     let id: String
     let email: String?
+}
+
+private struct PayoutAmountBody: Encodable {
+    let p_coin_amount: Int
 }
 
 private struct AppConfigRow: Decodable {

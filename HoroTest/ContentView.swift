@@ -2177,6 +2177,8 @@ private final class SupabaseAppViewModel: ObservableObject {
     /// บัญชีรับเงิน — ยังไม่ผูกหรือยังไม่ผ่านการตรวจ = ถอนเงินไม่ได้
     @Published private(set) var payoutAccount: SupabasePayoutAccount?
     @Published private(set) var payoutBankCodes: [String] = []
+    @Published private(set) var payoutSummary: SupabasePayoutSummary?
+    @Published private(set) var payoutHistory: [SupabasePayoutRequest] = []
     /// สถานะล่าสุดของคำถามแต่ละใบ (submitted / active / close_requested / completed / cancelled_refunded)
     @Published private(set) var questionStatuses: [UUID: String] = [:]
 
@@ -2384,6 +2386,30 @@ private final class SupabaseAppViewModel: ObservableObject {
 
         payoutAccount = try? await service.fetchPayoutAccount()
         payoutBankCodes = (try? await service.fetchPayoutBankCodes()) ?? []
+        payoutSummary = try? await service.fetchPayoutSummary()
+        payoutHistory = (try? await service.fetchPayoutHistory()) ?? []
+    }
+
+    func previewPayout(coinAmount: Int) async -> SupabasePayoutQuote? {
+        guard let service else { return nil }
+        return try? await service.previewPayout(coinAmount: coinAmount)
+    }
+
+    /// คืน nil เมื่อสำเร็จ หรือข้อความเหตุผลเมื่อไม่สำเร็จ
+    func requestPayout(coinAmount: Int) async -> String? {
+        guard let service, isConnected else {
+            return "ยังไม่ได้เชื่อมต่อ Supabase"
+        }
+
+        do {
+            try await service.requestPayout(coinAmount: coinAmount)
+            // ยอดต้องอ่านใหม่จากเซิร์ฟเวอร์ ไม่ใช่ลบเองในเครื่อง
+            await refreshWallet()
+            await refreshPayoutAccount()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     /// คืน nil เมื่อสำเร็จ หรือข้อความเหตุผลเมื่อไม่สำเร็จ
@@ -5076,6 +5102,226 @@ private struct SeerPayoutAccountForm: View {
     }
 }
 
+/// ถอนเงิน — ต้องเล่าให้ครบว่า "ถอนได้เท่าไหร่" "ค้างอยู่เท่าไหร่" และ "ที่เหลือถอนได้เมื่อไหร่"
+/// โชว์แค่ยอดเดียวจะทำให้หมอดูงงว่าทำไมกดถอนไม่ได้ทั้งที่มียอดค้างจ่ายอยู่
+private struct SeerWithdrawSection: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
+
+    @State private var isFormPresented = false
+
+    private var summary: SupabasePayoutSummary? { supabaseApp.payoutSummary }
+    private var isVerified: Bool { supabaseApp.payoutAccount?.isVerified ?? false }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: appLanguage.text("Withdraw", "ถอนเงิน"),
+                subtitle: appLanguage.text("Move your earnings to your bank", "โอนรายได้เข้าบัญชีธนาคารของคุณ")
+            )
+
+            if let summary {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        HoroCoinIcon(size: 20)
+                        Text("\(summary.withdrawableCoin)")
+                            .font(.title2.bold().monospacedDigit())
+                        Text(appLanguage.text("withdrawable", "ถอนได้ตอนนี้"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if summary.heldCoin > 0 {
+                        Text(appLanguage.text(
+                            "\(summary.heldCoin) coins still within the \(summary.holdDays)-day hold",
+                            "อีก \(summary.heldCoin) เหรียญยังอยู่ในช่วงรอ \(summary.holdDays) วัน"
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    if summary.pendingCoin > 0 {
+                        Text(appLanguage.text(
+                            "\(summary.pendingCoin) coins in a request being processed",
+                            "\(summary.pendingCoin) เหรียญอยู่ในคำขอที่กำลังดำเนินการ"
+                        ))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                    }
+
+                    Text(appLanguage.text(
+                        "Minimum \(summary.minCoin) coins per request",
+                        "ถอนขั้นต่ำครั้งละ \(summary.minCoin) เหรียญ"
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                    Button {
+                        isFormPresented = true
+                    } label: {
+                        Text(appLanguage.text("Request withdrawal", "ขอถอนเงิน"))
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!summary.canRequest || !isVerified || summary.pendingCoin > 0)
+
+                    if !isVerified {
+                        Text(appLanguage.text(
+                            "Your payout account must be verified first.",
+                            "บัญชีรับเงินต้องผ่านการตรวจก่อนถึงจะถอนได้"
+                        ))
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .cardStyle()
+            }
+
+            if !supabaseApp.payoutHistory.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(supabaseApp.payoutHistory.prefix(5)) { row in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(row.coinAmount) \(appLanguage.text("coins", "เหรียญ"))")
+                                    .font(.subheadline.weight(.semibold).monospacedDigit())
+
+                                Text(statusText(row))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Spacer(minLength: 8)
+
+                            Text("฿\(row.fiatAmountMinor / 100)")
+                                .font(.subheadline.weight(.bold).monospacedDigit())
+                        }
+                        .padding(.vertical, 10)
+
+                        if row.id != supabaseApp.payoutHistory.prefix(5).last?.id {
+                            Divider()
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .cardStyle()
+            }
+        }
+        .sheet(isPresented: $isFormPresented) {
+            SeerWithdrawForm(supabaseApp: supabaseApp, appLanguage: appLanguage)
+        }
+    }
+
+    private func statusText(_ row: SupabasePayoutRequest) -> String {
+        switch row.status {
+        case "paid":
+            return appLanguage.text("Paid · ref \(row.providerReference ?? "-")",
+                                    "โอนแล้ว · อ้างอิง \(row.providerReference ?? "-")")
+        case "approved":  return appLanguage.text("Approved, transfer pending", "อนุมัติแล้ว รอโอน")
+        case "rejected":  return appLanguage.text("Rejected: \(row.rejectReason ?? "-")",
+                                                  "ถูกปฏิเสธ: \(row.rejectReason ?? "-")")
+        case "cancelled": return appLanguage.text("Cancelled", "ยกเลิกแล้ว")
+        default:          return appLanguage.text("Waiting for review", "รอตรวจสอบ")
+        }
+    }
+}
+
+private struct SeerWithdrawForm: View {
+    @ObservedObject var supabaseApp: SupabaseAppViewModel
+    let appLanguage: AppLanguage
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var amountText = ""
+    @State private var quote: SupabasePayoutQuote?
+    @State private var failure: String?
+    @State private var isWorking = false
+
+    private var summary: SupabasePayoutSummary? { supabaseApp.payoutSummary }
+    private var amount: Int { Int(amountText) ?? 0 }
+
+    private var isValid: Bool {
+        guard let summary else { return false }
+        return amount >= summary.minCoin && amount <= summary.withdrawableCoin
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let summary {
+                    Section(appLanguage.text("Amount", "จำนวน")) {
+                        TextField(appLanguage.text("Coins", "จำนวนเหรียญ"), text: $amountText)
+                            .keyboardType(.numberPad)
+
+                        Text(appLanguage.text(
+                            "Between \(summary.minCoin) and \(summary.withdrawableCoin) coins",
+                            "ระหว่าง \(summary.minCoin) ถึง \(summary.withdrawableCoin) เหรียญ"
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                // ตัวเลขมาจากเซิร์ฟเวอร์ทั้งชุด แอปไม่คูณเอง — ที่บันทึกจริงจะได้ตรงกับที่เห็น
+                if let quote {
+                    Section(appLanguage.text("You will receive", "คุณจะได้รับ")) {
+                        LabeledContent(appLanguage.text("Gross", "ยอดเต็ม"), value: "฿\(quote.grossMinor / 100)")
+                        LabeledContent(appLanguage.text("Fee", "ค่าธรรมเนียม"), value: "฿\(quote.feeMinor / 100)")
+                        LabeledContent(appLanguage.text("Withholding tax", "ภาษีหัก ณ ที่จ่าย"),
+                                       value: "฿\(quote.withholdingTaxMinor / 100)")
+                        LabeledContent(appLanguage.text("Net", "ได้รับสุทธิ"), value: "฿\(quote.fiatAmountMinor / 100)")
+                            .font(.body.weight(.bold))
+                    }
+                }
+            }
+            .navigationTitle(appLanguage.text("Request Withdrawal", "ขอถอนเงิน"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(appLanguage.text("Cancel", "ยกเลิก")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(appLanguage.text("Confirm", "ยืนยัน")) {
+                        Task { await submit() }
+                    }
+                    .disabled(!isValid || isWorking || quote == nil)
+                }
+            }
+            .onChange(of: amountText) { _, _ in
+                Task { await refreshQuote() }
+            }
+            .alert(
+                appLanguage.text("Could not request", "ขอถอนไม่สำเร็จ"),
+                isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
+            ) {
+                Button(appLanguage.text("OK", "ตกลง"), role: .cancel) { failure = nil }
+            } message: {
+                Text(failure ?? "")
+            }
+        }
+    }
+
+    private func refreshQuote() async {
+        guard isValid else {
+            quote = nil
+            return
+        }
+        quote = await supabaseApp.previewPayout(coinAmount: amount)
+    }
+
+    private func submit() async {
+        isWorking = true
+        defer { isWorking = false }
+
+        if let message = await supabaseApp.requestPayout(coinAmount: amount) {
+            failure = message
+        } else {
+            dismiss()
+        }
+    }
+}
+
 /// รายการรายได้ของหมอดู — ตอบคำถาม "เงินก้อนนี้มาจากงานไหน หักไปเท่าไหร่"
 /// ซึ่งยอดค้างจ่ายก้อนเดียวตอบไม่ได้
 private struct SeerEarningSection: View {
@@ -5178,6 +5424,8 @@ private struct DashboardPageView: View {
                 )
 
                 SeerPayoutAccountSection(supabaseApp: supabaseApp, appLanguage: appLanguage)
+
+                SeerWithdrawSection(supabaseApp: supabaseApp, appLanguage: appLanguage)
 
                 SeerEarningSection(earnings: earnings, appLanguage: appLanguage)
 

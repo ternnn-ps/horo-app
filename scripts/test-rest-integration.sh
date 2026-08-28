@@ -608,5 +608,146 @@ else
 fi
 
 echo
+echo "── 10. หมอดูขอถอนเงิน"
+
+# ต่อจากหัวข้อ 9 บัญชีล่าสุดของหมอดูเป็น scb/3210 และสถานะ pending
+PAY_ACC_ID=$(api "$SEER_TOKEN" GET "v_my_payout_account?select=id" | jq -r '.[0].id // empty')
+
+if [[ -z "$PAY_ACC_ID" ]]; then
+  bad "มีบัญชีรับเงินไว้ทดสอบการถอน" "อ่าน v_my_payout_account ไม่ได้"
+else
+  # --- บัญชียังไม่ผ่านการตรวจ ต้องถอนไม่ได้ ---
+  NOT_VERIFIED=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":500}")
+  echo "$NOT_VERIFIED" | grep -q "payout_account_not_verified" \
+    && ok "บัญชียังไม่ผ่านการตรวจ → ขอถอนไม่ได้" \
+    || bad "บัญชียังไม่ผ่านการตรวจต้องขอถอนไม่ได้" "$NOT_VERIFIED"
+
+  if (( IS_LOCAL )); then
+    docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select public.admin_review_payout_account('$PAY_ACC_ID'::uuid, true, 'แอดมินทดสอบ')" >/dev/null 2>&1
+
+    SUMMARY=$(api "$SEER_TOKEN" GET "v_my_payout_summary?select=payable_coin,withdrawable_coin,pending_coin,min_coin,hold_days")
+    W_NOW=$(echo "$SUMMARY" | jq -r '.[0].withdrawable_coin // empty')
+    PAYABLE_NOW=$(echo "$SUMMARY" | jq -r '.[0].payable_coin // empty')
+    MIN_COIN=$(echo "$SUMMARY" | jq -r '.[0].min_coin // empty')
+
+    # --- รายได้ที่เพิ่งเกิดต้องยังไม่สุก ---
+    if [[ "$W_NOW" == "0" && "$PAYABLE_NOW" != "0" ]]; then
+      ok "รายได้ที่เพิ่งเกิดยังถอนไม่ได้ (มียอดค้างจ่าย $PAYABLE_NOW แต่ถอนได้ 0)"
+    else
+      bad "รายได้ที่เพิ่งเกิดต้องยังถอนไม่ได้" "payable=$PAYABLE_NOW withdrawable=$W_NOW"
+    fi
+
+    TOO_EARLY=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$MIN_COIN}")
+    echo "$TOO_EARLY" | grep -q "insufficient_withdrawable" \
+      && ok "ขอถอนก่อนเงินสุก → ถูกปฏิเสธ" \
+      || bad "ขอถอนก่อนเงินสุกต้องถูกปฏิเสธ" "$TOO_EARLY"
+
+    # --- ทำให้รายได้สุก แล้วเติมให้ถึงขั้นต่ำ ---
+    docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "update public.seer_earning set created_at = now() - interval '30 days' where seer_id = '$SEER_ACCOUNT_ID'" >/dev/null 2>&1
+
+    SEER_PAYABLE=$(api "$SEER_TOKEN" GET "v_my_wallet?select=payable_coin" | jq -r '.[0].payable_coin')
+    if (( SEER_PAYABLE < MIN_COIN )); then
+      # เติมยอดให้ถึงขั้นต่ำผ่าน ledger จริง เพื่อไม่ให้ wallet กับ ledger ไม่ตรงกัน
+      # เผื่อไว้ให้ขอได้สองรอบ — ถ้าเหลือพอดีรอบเดียว การทดสอบ "ขอซ้อน" จะแดงเพราะเงินหมด
+      # แทนที่จะแดงเพราะตัวกันถอนซ้อน = ผ่านด้วยเหตุผลผิด
+      TOPUP=$(( MIN_COIN * 3 - SEER_PAYABLE ))
+      docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+        "select public.internal_post_ledger('manual_adjustment', gen_random_uuid()::text, 'adjustment',
+           jsonb_build_array(
+             jsonb_build_object('ledger_account','seer_payable','account_id','$SEER_ACCOUNT_ID','amount',$TOPUP),
+             jsonb_build_object('ledger_account','platform_revenue','account_id',null,'amount',-$TOPUP)),
+           null, 'เติมยอดให้ถึงขั้นต่ำสำหรับเทสการถอน')" >/dev/null 2>&1
+      docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+        "insert into public.seer_earning (seer_id, source_type, source_id, gross_coin, seer_coin, revenue_share_bps, ledger_transaction_id, created_at)
+         select '$SEER_ACCOUNT_ID', 'tip', gen_random_uuid()::text, $TOPUP, $TOPUP, 10000, t.id, now() - interval '30 days'
+         from public.ledger_transaction t where t.reference_type = 'manual_adjustment' order by t.created_at desc limit 1" >/dev/null 2>&1
+    fi
+
+    # --- ต่ำกว่าขั้นต่ำ ---
+    BELOW=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":1}")
+    echo "$BELOW" | grep -q "below_minimum" \
+      && ok "ต่ำกว่าขั้นต่ำ → ถูกปฏิเสธ" \
+      || bad "ต่ำกว่าขั้นต่ำต้องถูกปฏิเสธ" "$BELOW"
+
+    # --- ขอเกินยอดที่ถอนได้ ---
+    W_READY=$(api "$SEER_TOKEN" GET "v_my_payout_summary?select=withdrawable_coin" | jq -r '.[0].withdrawable_coin')
+    BEFORE_PAYABLE=$(api "$SEER_TOKEN" GET "v_my_wallet?select=payable_coin" | jq -r '.[0].payable_coin')
+    OVER=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$(( W_READY + 1 ))}")
+    AFTER_OVER=$(api "$SEER_TOKEN" GET "v_my_wallet?select=payable_coin" | jq -r '.[0].payable_coin')
+    if echo "$OVER" | grep -q "insufficient_withdrawable" && [[ "$AFTER_OVER" == "$BEFORE_PAYABLE" ]]; then
+      ok "ขอเกินยอดที่ถอนได้ → ถูกปฏิเสธ และเหรียญไม่ขยับ"
+    else
+      bad "ขอเกินยอดที่ถอนได้ต้องถูกปฏิเสธและเหรียญไม่ขยับ" "$OVER · payable ${BEFORE_PAYABLE}→$AFTER_OVER"
+    fi
+
+    # --- ตัวเลขที่แสดงก่อนยืนยัน ต้องตรงกับที่บันทึกจริง ---
+    # ขอแค่ขั้นต่ำ ไม่ขอทั้งหมด เพื่อให้ยังเหลือเงินพอทดสอบการขอซ้อนต่อ
+    ASK=$MIN_COIN
+    QUOTE=$(api "$SEER_TOKEN" POST "rpc/preview_payout" "{\"p_coin_amount\":$ASK}")
+    Q_FIAT=$(echo "$QUOTE" | jq -r '.fiat_amount_minor // empty')
+    Q_RATE=$(echo "$QUOTE" | jq -r '.conversion_rate_micro // empty')
+
+    REQ=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$ASK}")
+    REQ_ID=$(echo "$REQ" | jq -r '.payout_request_id // empty')
+    AFTER_REQ=$(api "$SEER_TOKEN" GET "v_my_wallet?select=payable_coin" | jq -r '.[0].payable_coin')
+
+    if [[ -n "$REQ_ID" ]]; then
+      ok "ขอถอนสำเร็จ ($ASK เหรียญ)"
+    else
+      bad "ขอถอนสำเร็จ" "$REQ"
+    fi
+
+    # ถ้าอ่านยอดไม่ได้ต้องแดง — ปล่อยให้ค่าว่างกลายเป็น 0 แล้วเทียบ จะเขียวทั้งที่ไม่ได้พิสูจน์อะไร
+    if [[ -z "$ASK" || -z "$BEFORE_PAYABLE" || -z "$AFTER_REQ" ]]; then
+      bad "เหรียญต้องออกจากยอดค้างจ่ายทันทีตอนขอ" "อ่านยอดไม่ได้: ขอ='$ASK' ก่อน='$BEFORE_PAYABLE' หลัง='$AFTER_REQ'"
+    elif (( ASK > 0 && AFTER_REQ == BEFORE_PAYABLE - ASK )); then
+      ok "เหรียญออกจากยอดค้างจ่ายทันทีตอนขอ (${BEFORE_PAYABLE}→$AFTER_REQ ลด $ASK)"
+    else
+      bad "เหรียญต้องออกจากยอดค้างจ่ายทันทีตอนขอ" "${BEFORE_PAYABLE}→$AFTER_REQ คาดลด $ASK"
+    fi
+
+    HIST=$(api "$SEER_TOKEN" GET "v_my_payout_history?select=coin_amount,fiat_amount_minor,conversion_rate_micro,fee_minor,withholding_tax_minor,status&order=created_at.desc&limit=1")
+    H_FIAT=$(echo "$HIST" | jq -r '.[0].fiat_amount_minor // empty')
+    H_RATE=$(echo "$HIST" | jq -r '.[0].conversion_rate_micro // empty')
+    H_STATUS=$(echo "$HIST" | jq -r '.[0].status // empty')
+
+    [[ "$H_FIAT" == "$Q_FIAT" && "$H_RATE" == "$Q_RATE" && -n "$Q_FIAT" ]] \
+      && ok "ตัวเลขที่แสดงก่อนยืนยันตรงกับที่บันทึกจริง ($Q_FIAT สตางค์)" \
+      || bad "ตัวเลขที่แสดงก่อนยืนยันต้องตรงกับที่บันทึกจริง" "preview=$Q_FIAT/$Q_RATE บันทึก=$H_FIAT/$H_RATE"
+
+    [[ "$H_STATUS" == "requested" ]] \
+      && ok "คำขออยู่สถานะรอตรวจ" \
+      || bad "คำขอต้องอยู่สถานะ requested" "ได้ '$H_STATUS'"
+
+    # --- ขอซ้อน ---
+    # ต้องยังมีเงินเหลือพอขอรอบสอง ไม่งั้นข้อนี้จะผ่านเพราะเงินหมด ไม่ใช่เพราะตัวกันถอนซ้อน
+    LEFT=$(api "$SEER_TOKEN" GET "v_my_payout_summary?select=withdrawable_coin" | jq -r '.[0].withdrawable_coin')
+    if (( LEFT < MIN_COIN )); then
+      bad "ต้องเหลือเงินพอขอรอบสอง เพื่อทดสอบตัวกันถอนซ้อนให้ตรงเหตุผล" "เหลือ $LEFT ขั้นต่ำ $MIN_COIN"
+    else
+      DUP=$(api "$SEER_TOKEN" POST "rpc/request_payout" "{\"p_coin_amount\":$MIN_COIN}")
+      echo "$DUP" | grep -q "payout_already_pending" \
+        && ok "มีคำขอค้างอยู่แล้วขออีก → ถูกปฏิเสธด้วยตัวกันถอนซ้อน (ยังเหลือ $LEFT เหรียญ)" \
+        || bad "ขอซ้อนต้องถูกปฏิเสธด้วย payout_already_pending ไม่ใช่เพราะเงินหมด" "$DUP"
+    fi
+
+    OUT_HIST=$(api "$OUTSIDER_TOKEN" GET "v_my_payout_history?select=coin_amount" | jq -r 'if type == "array" then length else "ไม่ใช่อาเรย์: " + tostring end')
+    [[ "$OUT_HIST" == "0" ]] \
+      && ok "คนอื่นอ่านประวัติการถอนของหมอดูไม่เห็น (อาเรย์ว่าง)" \
+      || bad "คนอื่นอ่านประวัติการถอนของหมอดูไม่เห็น" "ได้ $OUT_HIST"
+
+    LEDGER2=$(docker exec -i supabase_db_project-chata psql -U postgres -d postgres -tAc \
+      "select count(*) from (select transaction_id from public.ledger_entry group by transaction_id having sum(amount) <> 0) t" 2>/dev/null || echo "?")
+    [[ "$LEDGER2" == "0" ]] \
+      && ok "ledger สมดุลหลังขอถอน" \
+      || bad "ledger สมดุลหลังขอถอน" "พบ $LEDGER2 รายการไม่สมดุล"
+  else
+    echo "  ⏭  ข้ามส่วนที่ต้องอนุมัติบัญชีและปรับวันที่ (ต้องใช้ psql/service_role)"
+  fi
+fi
+
+echo
 echo "── สรุป: ผ่าน $PASS · ไม่ผ่าน $FAIL"
 [[ $FAIL -eq 0 ]]
