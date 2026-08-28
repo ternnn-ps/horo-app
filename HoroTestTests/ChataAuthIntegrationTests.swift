@@ -145,4 +145,56 @@ final class ChataAuthIntegrationTests: XCTestCase {
             XCTAssertEqual(after, before, "ถูกปฏิเสธแล้วเหรียญห้ามขยับ")
         }
     }
+
+    // MARK: - แทนที่เทสของ MockHoroDataService ที่ถูกลบใน ticket 09
+    //
+    // ของเดิมพิสูจน์บนของปลอมล้วน (`MockHoroDataService` + `UserDefaults`) ซึ่งพิสูจน์อะไรไม่ได้เลย
+    // เรื่องสิทธิ์และเรื่องเงิน สองตัวข้างล่างครอบพฤติกรรมเดียวกันแต่ยิงฐานจริงผ่าน RLS ของผู้ใช้
+
+    /// แทน `testFetchSeersSearchesSkillsAndHeadline`
+    func testSeerSearchMatchesByName() async throws {
+        _ = try await service.signIn(email: "customer@horo.test", password: "HoroTest123!")
+
+        let all = try await service.fetchSeerListings(matching: nil)
+        let fixtureSeer = try XCTUnwrap(
+            all.first(where: { $0.displayName.contains("ทดสอบ") }),
+            "fixture ต้องมีหมอดูชื่อ 'หมอดูทดสอบ'"
+        )
+
+        let hit = try await service.fetchSeerListings(matching: "ทดสอบ")
+        XCTAssertTrue(hit.contains(where: { $0.id == fixtureSeer.id }), "ค้นด้วยชื่อแล้วต้องเจอ")
+
+        let miss = try await service.fetchSeerListings(matching: "ไม่มีหมอดูชื่อนี้แน่นอน\(UUID().uuidString)")
+        XCTAssertTrue(miss.isEmpty, "ค้นคำที่ไม่มีต้องได้ผลลัพธ์ว่าง ไม่ใช่คืนทั้งหมด")
+    }
+
+    /// แทน `testDeleteReadingRequestRemovesRelatedThread`
+    /// ของเดิมแค่ลบแถวใน `UserDefaults` — ของจริงต้องคืนเหรียญออกจาก escrow ให้ครบ
+    func testCancellingAnUnansweredQuestionRefundsEveryCoin() async throws {
+        let customerID = try await service.signIn(email: "customer@horo.test", password: "HoroTest123!")
+
+        let listings = try await service.fetchSeerListings(matching: nil)
+        let listing = try XCTUnwrap(
+            listings.first(where: { $0.serviceID != nil }),
+            "fixture ต้องมีหมอดูที่เปิด service"
+        )
+        let serviceID = try XCTUnwrap(listing.serviceID)
+
+        let before = try await service.fetchWallet()
+        XCTAssertEqual(before.accountID, customerID)
+
+        let draft = SupabaseQuestionDraft.startDraft(seerServiceID: serviceID, firstMessage: "ทดสอบยกเลิกแล้วคืนเหรียญ")
+        let question = try await service.submitQuestion(draft)
+
+        let escrowed = try await service.fetchWallet()
+        XCTAssertEqual(escrowed.availableCoin, before.availableCoin - question.priceCoin, "เหรียญต้องถูกกันไว้")
+        XCTAssertEqual(escrowed.reservedCoin, before.reservedCoin + question.priceCoin)
+
+        let lifecycle = try await service.cancelQuestion(id: question.questionID)
+        XCTAssertEqual(lifecycle.status, "cancelled_refunded")
+
+        let after = try await service.fetchWallet()
+        XCTAssertEqual(after.availableCoin, before.availableCoin, "ยกเลิกก่อนหมอดูตอบต้องคืนเต็มจำนวน")
+        XCTAssertEqual(after.reservedCoin, before.reservedCoin, "ต้องไม่มีเหรียญค้างใน escrow")
+    }
 }

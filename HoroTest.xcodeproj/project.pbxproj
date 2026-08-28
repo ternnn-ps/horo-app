@@ -13,9 +13,6 @@
 		1A0000010000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000014 /* Assets.xcassets */; };
 		1A0000010000000000000005 /* RecordListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000015 /* RecordListViewModelTests.swift */; };
 		1A0000010000000000000006 /* UserProfileViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000018 /* UserProfileViewModel.swift */; };
-		1A0000010000000000000007 /* HoroDomainModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001B /* HoroDomainModels.swift */; };
-		1A0000010000000000000008 /* HoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001C /* HoroDataService.swift */; };
-		1A0000010000000000000009 /* MockHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001D /* MockHoroDataService.swift */; };
 		1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001E /* SupabaseHoroDataService.swift */; };
 		1A00000100000000000000A1 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 1A00000100000000000000B1 /* Auth */; };
 		1A00000100000000000000A2 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 1A00000100000000000000B2 /* Realtime */; };
@@ -23,7 +20,6 @@
 		1A00000100000000000000E1 /* QuestionDraftPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */; };
 		1A0000010000000000000101 /* ChataRealtime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000010000000000000102 /* ChataRealtime.swift */; };
 		1A00000100000000000000D1 /* ChataAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000D2 /* ChataAuth.swift */; };
-		1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A000001000000000000001F /* HoroDataServiceTests.swift */; };
 		1A00000100000000000000A1 /* SupabaseConfig.plist in Resources */ = {isa = PBXBuildFile; fileRef = 1A00000100000000000000A0 /* SupabaseConfig.plist */; };
 /* End PBXBuildFile section */
 
@@ -46,13 +42,9 @@
 		1A0000010000000000000016 /* HoroTest.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HoroTest.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000010000000000000017 /* HoroTestTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HoroTestTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000010000000000000018 /* UserProfileViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileViewModel.swift; sourceTree = "<group>"; };
-		1A000001000000000000001B /* HoroDomainModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDomainModels.swift; sourceTree = "<group>"; };
-		1A000001000000000000001C /* HoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataService.swift; sourceTree = "<group>"; };
-		1A000001000000000000001D /* MockHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockHoroDataService.swift; sourceTree = "<group>"; };
 		1A000001000000000000001E /* SupabaseHoroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseHoroDataService.swift; sourceTree = "<group>"; };
 		1A00000100000000000000D2 /* ChataAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChataAuth.swift; sourceTree = "<group>"; };
 		1A0000010000000000000102 /* ChataRealtime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChataRealtime.swift; sourceTree = "<group>"; };
-		1A000001000000000000001F /* HoroDataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoroDataServiceTests.swift; sourceTree = "<group>"; };
 		1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionDraftPolicyTests.swift; sourceTree = "<group>"; };
 		1A00000100000000000000F2 /* ChataAuthIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChataAuthIntegrationTests.swift; sourceTree = "<group>"; };
 		1A00000100000000000000A0 /* SupabaseConfig.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = SupabaseConfig.plist; sourceTree = "<group>"; };
@@ -106,7 +98,6 @@
 			isa = PBXGroup;
 			children = (
 				1A0000010000000000000015 /* RecordListViewModelTests.swift */,
-				1A000001000000000000001F /* HoroDataServiceTests.swift */,
 				1A00000100000000000000E2 /* QuestionDraftPolicyTests.swift */,
 				1A00000100000000000000F2 /* ChataAuthIntegrationTests.swift */,
 			);
@@ -116,7 +107,6 @@
 		1A0000010000000000000064 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				1A000001000000000000001B /* HoroDomainModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -124,8 +114,6 @@
 		1A0000010000000000000065 /* Services */ = {
 			isa = PBXGroup;
 			children = (
-				1A000001000000000000001C /* HoroDataService.swift */,
-				1A000001000000000000001D /* MockHoroDataService.swift */,
 				1A000001000000000000001E /* SupabaseHoroDataService.swift */,
 				1A00000100000000000000D2 /* ChataAuth.swift */,
 				1A0000010000000000000102 /* ChataRealtime.swift */,
@@ -251,9 +239,6 @@
 			files = (
 				1A0000010000000000000001 /* HoroTestApp.swift in Sources */,
 				1A0000010000000000000002 /* ContentView.swift in Sources */,
-				1A0000010000000000000007 /* HoroDomainModels.swift in Sources */,
-				1A0000010000000000000008 /* HoroDataService.swift in Sources */,
-				1A0000010000000000000009 /* MockHoroDataService.swift in Sources */,
 				1A000001000000000000000A /* SupabaseHoroDataService.swift in Sources */,
 				1A00000100000000000000D1 /* ChataAuth.swift in Sources */,
 				1A0000010000000000000101 /* ChataRealtime.swift in Sources */,
@@ -267,7 +252,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A0000010000000000000005 /* RecordListViewModelTests.swift in Sources */,
-				1A000001000000000000000B /* HoroDataServiceTests.swift in Sources */,
 				1A00000100000000000000E1 /* QuestionDraftPolicyTests.swift in Sources */,
 				1A00000100000000000000F1 /* ChataAuthIntegrationTests.swift in Sources */,
 			);

@@ -1,5 +1,35 @@
 import Foundation
 
+/// error กลางของชั้นที่คุยกับ Supabase
+///
+/// เคยอยู่ใน `HoroDataService.swift` คู่กับ protocol `HoroDataServicing` ของยุค mock
+/// พอลบ protocol นั้นทิ้ง (ticket 09) เลยย้ายมาอยู่กับ client ตัวจริงซึ่งเป็นที่เดียวที่ throw มัน
+enum HoroDataError: Error, Equatable, LocalizedError {
+    case unauthenticated
+    case notFound(String)
+    case invalidInput(String)
+    case notConfigured(String)
+    case server(String)
+    case decoding(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unauthenticated:
+            return "No signed-in user is available."
+        case .notFound(let message):
+            return message
+        case .invalidInput(let message):
+            return message
+        case .notConfigured(let message):
+            return message
+        case .server(let message):
+            return message
+        case .decoding(let message):
+            return message
+        }
+    }
+}
+
 struct SupabaseConfiguration: Equatable {
     let url: URL
     let anonKey: String
@@ -76,15 +106,6 @@ struct SupabaseAccount: Decodable, Equatable, Identifiable {
         case user
         case seer
         case admin
-
-        var appRole: HoroUserRole {
-            switch self {
-            case .seer:
-                return .seer
-            case .user, .admin:
-                return .customer
-            }
-        }
     }
 
     let id: UUID
@@ -310,7 +331,7 @@ struct SupabaseSubmittedQuestion: Decodable, Equatable {
     }
 }
 
-final class SupabaseHoroDataService: HoroDataServicing {
+final class SupabaseHoroDataService {
     let configuration: SupabaseConfiguration
     let auth: ChataAuth
 
@@ -556,159 +577,6 @@ final class SupabaseHoroDataService: HoroDataServicing {
             path: "rest/v1/rpc/cancel_question",
             method: "POST",
             body: ["p_question_id": id.uuidString]
-        )
-    }
-
-    func signInMock(as role: HoroUserRole) async throws -> HoroUser {
-        let email = role == .seer ? "seer@horo.test" : "customer@horo.test"
-        let userID = try await signIn(email: email, password: configuration.testPassword)
-        let account = try await fetchAccount()
-
-        return HoroUser(
-            id: userID,
-            role: account.role.appRole,
-            displayName: email,
-            email: email
-        )
-    }
-
-    func currentUser() async -> HoroUser? {
-        guard let userID = auth.currentUserID else {
-            return nil
-        }
-
-        return HoroUser(
-            id: userID,
-            role: .customer,
-            displayName: "",
-            email: ""
-        )
-    }
-
-    func fetchSeers(matching query: String?) async throws -> [SeerProfile] {
-        let listings = try await fetchSeerListings(matching: query)
-
-        return listings.map { listing in
-            SeerProfile(
-                id: listing.id,
-                userId: listing.id,
-                displayName: listing.displayName,
-                headline: listing.skills.first ?? "Horo Seer",
-                bio: listing.bio,
-                skills: listing.skills,
-                styles: [],
-                ratingAverage: listing.ratingAverage ?? 0,
-                reviewCount: listing.ratingCount,
-                rateLabel: listing.priceCoin.map { "\($0) coins" } ?? "Ask",
-                isOnline: listing.isActive
-            )
-        }
-    }
-
-    func fetchSeer(id: UUID) async throws -> SeerProfile {
-        guard let listing = try await fetchSeerListings(matching: nil).first(where: { $0.id == id }) else {
-            throw HoroDataError.notFound("Seer profile was not found.")
-        }
-
-        return SeerProfile(
-            id: listing.id,
-            userId: listing.id,
-            displayName: listing.displayName,
-            headline: listing.skills.first ?? "Horo Seer",
-            bio: listing.bio,
-            skills: listing.skills,
-            styles: [],
-            ratingAverage: listing.ratingAverage ?? 0,
-            reviewCount: listing.ratingCount,
-            rateLabel: listing.priceCoin.map { "\($0) coins" } ?? "Ask",
-            isOnline: listing.isActive
-        )
-    }
-
-    func fetchCustomerProfile(userId: UUID) async throws -> CustomerProfile {
-        let rows: [SupabaseUserProfileRow] = try await request(
-            path: "rest/v1/user_profile",
-            queryItems: [
-                URLQueryItem(name: "select", value: "account_id,display_name,birthdate,created_at,updated_at"),
-                URLQueryItem(name: "account_id", value: "eq.\(userId.uuidString)"),
-                URLQueryItem(name: "limit", value: "1")
-            ]
-        )
-
-        guard let row = rows.first else {
-            throw HoroDataError.notFound("Customer profile was not found.")
-        }
-
-        return CustomerProfile(
-            id: row.accountID,
-            userId: row.accountID,
-            displayName: row.displayName,
-            memberTier: "Standard"
-        )
-    }
-
-    func createReadingRequest(_ draft: ReadingRequestDraft) async throws -> ReadingRequest {
-        throw HoroDataError.notConfigured("Use submitQuestion for the current Supabase question schema.")
-    }
-
-    func fetchReadingRequests(for userId: UUID, role: HoroUserRole) async throws -> [ReadingRequest] {
-        let questions = try await fetchQuestions()
-
-        return questions.map { question in
-            ReadingRequest(
-                id: question.id,
-                customerId: question.userID,
-                seerId: question.seerID,
-                topic: "Question",
-                question: "",
-                status: ReadingRequestStatus(rawValue: question.status) ?? .active,
-                createdAt: Date(),
-                updatedAt: Date()
-            )
-        }
-    }
-
-    func updateReadingRequestStatus(id: UUID, status: ReadingRequestStatus) async throws -> ReadingRequest {
-        throw HoroDataError.notConfigured("Use question lifecycle RPCs for the current Supabase question schema.")
-    }
-
-    func deleteReadingRequest(id: UUID) async throws {
-        throw HoroDataError.notConfigured("Use cancel_question for the current Supabase question schema.")
-    }
-
-    func fetchChatThreads(for userId: UUID, role: HoroUserRole) async throws -> [ChatThread] {
-        throw HoroDataError.notConfigured("Chat threads are represented by question rows in the current Supabase schema.")
-    }
-
-    func fetchMessages(threadId: UUID) async throws -> [ChatMessageRecord] {
-        let messages = try await fetchMessages(questionID: threadId)
-
-        return messages.map { message in
-            ChatMessageRecord(
-                threadId: message.questionID,
-                senderId: message.senderID ?? UUID(),
-                senderRole: .customer,
-                body: message.content ?? "",
-                createdAt: Date()
-            )
-        }
-    }
-
-    @discardableResult
-    func sendMessage(
-        threadId: UUID,
-        senderId: UUID,
-        senderRole: HoroUserRole,
-        body: String
-    ) async throws -> ChatMessageRecord {
-        let message = try await sendQuestionMessage(questionID: threadId, senderID: senderId, body: body)
-
-        return ChatMessageRecord(
-            threadId: message.questionID,
-            senderId: message.senderID ?? senderId,
-            senderRole: senderRole,
-            body: message.content ?? "",
-            createdAt: Date()
         )
     }
 
