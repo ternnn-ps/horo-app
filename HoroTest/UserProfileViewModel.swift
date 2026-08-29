@@ -23,6 +23,36 @@ enum ProfileAvatarStyle: String, CaseIterable, Codable, Identifiable {
     }
 }
 
+enum SeerPersonalityTrait: String, CaseIterable, Codable, Identifiable {
+    case listener
+    case talkative
+    case fun
+    case calm
+    case comforting
+
+    var id: String { rawValue }
+
+    static let defaultSelection: [SeerPersonalityTrait] = [
+        .listener,
+        .fun,
+        .comforting
+    ]
+}
+
+enum SeerSkillType: String, CaseIterable, Codable, Identifiable {
+    case tarot
+    case oracle
+    case sacred
+    case sevenNineBase
+
+    var id: String { rawValue }
+
+    static let defaultSelection: [SeerSkillType] = [
+        .tarot,
+        .oracle
+    ]
+}
+
 struct UserProfile: Codable, Equatable {
     var fullName: String
     var role: String
@@ -30,6 +60,10 @@ struct UserProfile: Codable, Equatable {
     var phone: String
     var location: String
     var avatarStyle: ProfileAvatarStyle
+    var reviewRating: Double
+    var reviewCount: Int
+    var personalityTraits: [SeerPersonalityTrait]
+    var seerSkills: [SeerSkillType]
 
     var initials: String {
         let initials = fullName
@@ -49,7 +83,11 @@ struct UserProfile: Codable, Equatable {
         email: String,
         phone: String,
         location: String,
-        avatarStyle: ProfileAvatarStyle = .ocean
+        avatarStyle: ProfileAvatarStyle = .ocean,
+        reviewRating: Double = 4.8,
+        reviewCount: Int = 128,
+        personalityTraits: [SeerPersonalityTrait] = SeerPersonalityTrait.defaultSelection,
+        seerSkills: [SeerSkillType] = SeerSkillType.defaultSelection
     ) {
         self.fullName = fullName
         self.role = role
@@ -57,6 +95,10 @@ struct UserProfile: Codable, Equatable {
         self.phone = phone
         self.location = location
         self.avatarStyle = avatarStyle
+        self.reviewRating = reviewRating
+        self.reviewCount = reviewCount
+        self.personalityTraits = personalityTraits
+        self.seerSkills = seerSkills
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -66,6 +108,10 @@ struct UserProfile: Codable, Equatable {
         case phone
         case location
         case avatarStyle
+        case reviewRating
+        case reviewCount
+        case personalityTraits
+        case seerSkills
     }
 
     init(from decoder: Decoder) throws {
@@ -77,6 +123,10 @@ struct UserProfile: Codable, Equatable {
         phone = try container.decode(String.self, forKey: .phone)
         location = try container.decode(String.self, forKey: .location)
         avatarStyle = try container.decodeIfPresent(ProfileAvatarStyle.self, forKey: .avatarStyle) ?? .ocean
+        reviewRating = try container.decodeIfPresent(Double.self, forKey: .reviewRating) ?? 4.8
+        reviewCount = try container.decodeIfPresent(Int.self, forKey: .reviewCount) ?? 128
+        personalityTraits = try container.decodeIfPresent([SeerPersonalityTrait].self, forKey: .personalityTraits) ?? SeerPersonalityTrait.defaultSelection
+        seerSkills = try container.decodeIfPresent([SeerSkillType].self, forKey: .seerSkills) ?? SeerSkillType.defaultSelection
     }
 
     static let `default` = UserProfile(
@@ -85,7 +135,11 @@ struct UserProfile: Codable, Equatable {
         email: "pacharapol@example.com",
         phone: "+66 00 000 0000",
         location: "Bangkok, Thailand",
-        avatarStyle: .ocean
+        avatarStyle: .ocean,
+        reviewRating: 4.8,
+        reviewCount: 128,
+        personalityTraits: SeerPersonalityTrait.defaultSelection,
+        seerSkills: SeerSkillType.defaultSelection
     )
 }
 
@@ -137,7 +191,11 @@ final class UserProfileViewModel: ObservableObject {
             email: newProfile.email.trimmingCharacters(in: .whitespacesAndNewlines),
             phone: newProfile.phone.trimmingCharacters(in: .whitespacesAndNewlines),
             location: newProfile.location.trimmingCharacters(in: .whitespacesAndNewlines),
-            avatarStyle: newProfile.avatarStyle
+            avatarStyle: newProfile.avatarStyle,
+            reviewRating: min(max(newProfile.reviewRating, 0), 5),
+            reviewCount: max(newProfile.reviewCount, 0),
+            personalityTraits: newProfile.personalityTraits,
+            seerSkills: newProfile.seerSkills
         )
 
         guard !cleanProfile.fullName.isEmpty else {

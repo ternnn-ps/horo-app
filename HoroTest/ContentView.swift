@@ -504,6 +504,100 @@ private extension ProfileAvatarStyle {
     }
 }
 
+private extension SeerPersonalityTrait {
+    func title(in language: AppLanguage) -> String {
+        switch self {
+        case .listener:
+            return language.text("Listener", "ผู้ฟังที่ดี")
+        case .talkative:
+            return language.text("Talkative", "คุยเก่ง")
+        case .fun:
+            return language.text("Fun / Funny", "สนุก/ตลก")
+        case .calm:
+            return language.text("Calm", "ขรึม")
+        case .comforting:
+            return language.text("Comforting", "ปลอบโยน")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .listener:
+            return "ear.fill"
+        case .talkative:
+            return "bubble.left.and.bubble.right.fill"
+        case .fun:
+            return "sparkles"
+        case .calm:
+            return "moon.fill"
+        case .comforting:
+            return "heart.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .listener:
+            return .teal
+        case .talkative:
+            return .blue
+        case .fun:
+            return .orange
+        case .calm:
+            return .indigo
+        case .comforting:
+            return .pink
+        }
+    }
+}
+
+private extension SeerSkillType {
+    func title(in language: AppLanguage) -> String {
+        switch self {
+        case .tarot:
+            return language.text("Tarot", "ไพ่ทาโรต์")
+        case .oracle:
+            return language.text("Oracle", "ไพ่ออราเคิล")
+        case .sacred:
+            return language.text("Sacred", "ขลัง")
+        case .sevenNineBase:
+            return language.text("7 ตัว 9 ฐาน", "7 ตัว 9 ฐาน")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .tarot:
+            return "rectangle.stack.fill"
+        case .oracle:
+            return "sparkles.rectangle.stack.fill"
+        case .sacred:
+            return "wand.and.stars"
+        case .sevenNineBase:
+            return "number.square.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .tarot:
+            return .purple
+        case .oracle:
+            return .blue
+        case .sacred:
+            return .orange
+        case .sevenNineBase:
+            return .teal
+        }
+    }
+}
+
+private extension UserProfile {
+    var ratingLabel: String {
+        reviewRating.formatted(.number.precision(.fractionLength(1)))
+    }
+}
+
 private struct AppBackground: View {
     var body: some View {
         LinearGradient(
@@ -3082,6 +3176,7 @@ private struct CustomerSeerProfileView: View {
     let onOpenChat: () -> Void
 
     @State private var isAddFundsSheetPresented = false
+    @State private var isBookingSheetPresented = false
     @State private var activeNotice: CustomerSeerActionNotice?
     @State private var topUpReason = ""
 
@@ -3167,6 +3262,13 @@ private struct CustomerSeerProfileView: View {
                 appLanguage: appLanguage
             )
         }
+        .sheet(isPresented: $isBookingSheetPresented) {
+            BookingSheet(
+                seer: seer,
+                coinBalance: $coinBalance,
+                appLanguage: appLanguage
+            )
+        }
         .alert(item: $activeNotice) { notice in
             Alert(
                 title: Text(notice.title),
@@ -3177,10 +3279,7 @@ private struct CustomerSeerProfileView: View {
     }
 
     private func bookReading() {
-        activeNotice = CustomerSeerActionNotice(
-            title: appLanguage.text("Booking Requested", "ส่งคำขอจองแล้ว"),
-            message: appLanguage.text("A mock reading request was sent to \(seer.name).", "ส่งคำขอทำนายทดสอบไปหา \(seer.name) แล้ว")
-        )
+        isBookingSheetPresented = true
     }
 
     private func messageSeer() {
@@ -3389,6 +3488,407 @@ private struct CustomerSeerActionNotice: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+}
+
+private enum BookingPeriod: String, CaseIterable, Identifiable {
+    case morning
+    case afternoon
+    case evening
+
+    var id: String { rawValue }
+
+    func title(in language: AppLanguage) -> String {
+        switch self {
+        case .morning:
+            return language.text("Morning", "ช่วงเช้า")
+        case .afternoon:
+            return language.text("Afternoon", "ช่วงบ่าย")
+        case .evening:
+            return language.text("Evening", "ช่วงเย็น")
+        }
+    }
+
+    var timeRange: String {
+        switch self {
+        case .morning:
+            return "09:00 - 12:00"
+        case .afternoon:
+            return "13:00 - 16:00"
+        case .evening:
+            return "18:00 - 21:00"
+        }
+    }
+
+    var coinCost: Int {
+        switch self {
+        case .morning:
+            return 299
+        case .afternoon:
+            return 349
+        case .evening:
+            return 399
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .morning:
+            return "sunrise.fill"
+        case .afternoon:
+            return "sun.max.fill"
+        case .evening:
+            return "moon.stars.fill"
+        }
+    }
+}
+
+private struct MockBookedPeriod: Identifiable {
+    let id = UUID()
+    let dayOffset: Int
+    let period: BookingPeriod
+
+    var date: Date {
+        let startOfToday = Calendar.current.startOfDay(for: Date())
+        return Calendar.current.date(byAdding: .day, value: dayOffset, to: startOfToday) ?? startOfToday
+    }
+
+    static let mockPeriods = [
+        MockBookedPeriod(dayOffset: 0, period: .afternoon),
+        MockBookedPeriod(dayOffset: 1, period: .morning),
+        MockBookedPeriod(dayOffset: 1, period: .evening),
+        MockBookedPeriod(dayOffset: 3, period: .afternoon)
+    ]
+}
+
+private struct BookingSheet: View {
+    let seer: CustomerSeer
+    @Binding var coinBalance: Int
+    let appLanguage: AppLanguage
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedDate = Date()
+    @State private var selectedPeriod: BookingPeriod = .morning
+    @State private var activeNotice: BookingNotice?
+
+    private var selectedDayBookedPeriods: [MockBookedPeriod] {
+        MockBookedPeriod.mockPeriods.filter {
+            Calendar.current.isDate($0.date, inSameDayAs: selectedDate)
+        }
+    }
+
+    private var isSelectedPeriodBooked: Bool {
+        selectedDayBookedPeriods.contains { $0.period == selectedPeriod }
+    }
+
+    private var canConfirmBooking: Bool {
+        !isSelectedPeriodBooked && coinBalance >= selectedPeriod.coinCost
+    }
+
+    private var selectedDateLabel: String {
+        selectedDate.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 16) {
+                    BookingSeerSummaryCard(
+                        seer: seer,
+                        selectedDateLabel: selectedDateLabel,
+                        selectedPeriod: selectedPeriod,
+                        coinBalance: coinBalance,
+                        appLanguage: appLanguage
+                    )
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(
+                            title: appLanguage.text("Select Date", "เลือกวันที่"),
+                            subtitle: appLanguage.text("Choose a date for your reading", "เลือกวันที่ต้องการรับคำทำนาย")
+                        )
+
+                        DatePicker(
+                            appLanguage.text("Booking Date", "วันที่จอง"),
+                            selection: $selectedDate,
+                            in: Date()...,
+                            displayedComponents: .date
+                        )
+                        .datePickerStyle(.graphical)
+                        .padding(12)
+                        .cardStyle()
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(
+                            title: appLanguage.text("Select Period", "เลือกช่วงเวลา"),
+                            subtitle: appLanguage.text("Booked periods are locked for this mock schedule", "ช่วงเวลาที่ถูกจองแล้วจะไม่สามารถเลือกได้")
+                        )
+
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                            ForEach(BookingPeriod.allCases) { period in
+                                BookingPeriodCard(
+                                    period: period,
+                                    isSelected: selectedPeriod == period,
+                                    isBooked: selectedDayBookedPeriods.contains { $0.period == period },
+                                    appLanguage: appLanguage
+                                ) {
+                                    selectedPeriod = period
+                                }
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        SectionHeader(
+                            title: appLanguage.text("Already Booked", "ช่วงที่ถูกจองแล้ว"),
+                            subtitle: appLanguage.text("Reserved periods for the selected date", "เวลาที่มีการจองไว้แล้วในวันที่เลือก")
+                        )
+
+                        if selectedDayBookedPeriods.isEmpty {
+                            Text(appLanguage.text("No booked periods on this date.", "ยังไม่มีช่วงเวลาที่ถูกจองในวันนี้"))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .cardStyle()
+                        } else {
+                            LazyVStack(spacing: 10) {
+                                ForEach(selectedDayBookedPeriods) { bookedPeriod in
+                                    BookedPeriodRow(period: bookedPeriod.period, appLanguage: appLanguage)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+                .padding(.bottom, 92)
+            }
+            .scrollIndicators(.hidden)
+            .background(AppBackground())
+            .navigationTitle(appLanguage.text("Book Reading", "จองคำทำนาย"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(appLanguage.text("Close", "ปิด")) {
+                        dismiss()
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button(action: confirmBooking) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "calendar.badge.checkmark")
+                        Text(appLanguage.text("Book \(selectedPeriod.title(in: appLanguage))", "จอง\(selectedPeriod.title(in: appLanguage))"))
+                        HoroCoinIcon(size: 18)
+                        Text(appLanguage.text("\(selectedPeriod.coinCost) coins", "\(selectedPeriod.coinCost) เหรียญ"))
+                    }
+                    .font(.headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!canConfirmBooking)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+                .background(.bar)
+            }
+            .onChange(of: selectedDate) { _, _ in
+                selectFirstAvailablePeriodIfNeeded()
+            }
+            .alert(item: $activeNotice) { notice in
+                Alert(
+                    title: Text(notice.title),
+                    message: Text(notice.message),
+                    dismissButton: .default(Text(appLanguage.text("Done", "เสร็จ"))) {
+                        if notice.shouldDismiss {
+                            dismiss()
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private func selectFirstAvailablePeriodIfNeeded() {
+        if !isSelectedPeriodBooked {
+            return
+        }
+
+        if let availablePeriod = BookingPeriod.allCases.first(where: { period in
+            !selectedDayBookedPeriods.contains { $0.period == period }
+        }) {
+            selectedPeriod = availablePeriod
+        }
+    }
+
+    private func confirmBooking() {
+        guard !isSelectedPeriodBooked else {
+            activeNotice = BookingNotice(
+                title: appLanguage.text("Period Already Booked", "ช่วงเวลานี้ถูกจองแล้ว"),
+                message: appLanguage.text("Please choose another available period.", "กรุณาเลือกช่วงเวลาอื่นที่ยังว่าง"),
+                shouldDismiss: false
+            )
+            return
+        }
+
+        guard coinBalance >= selectedPeriod.coinCost else {
+            activeNotice = BookingNotice(
+                title: appLanguage.text("Not Enough Coins", "เหรียญไม่พอ"),
+                message: appLanguage.text("Add coins before booking this reading.", "กรุณาเติมเหรียญก่อนจองคำทำนายนี้"),
+                shouldDismiss: false
+            )
+            return
+        }
+
+        coinBalance -= selectedPeriod.coinCost
+        activeNotice = BookingNotice(
+            title: appLanguage.text("Booking Confirmed", "ยืนยันการจองแล้ว"),
+            message: appLanguage.text(
+                "\(seer.name) is booked on \(selectedDateLabel), \(selectedPeriod.timeRange). \(selectedPeriod.coinCost) coins were used.",
+                "จอง \(seer.name) วันที่ \(selectedDateLabel) เวลา \(selectedPeriod.timeRange) แล้ว ใช้ \(selectedPeriod.coinCost) เหรียญ"
+            ),
+            shouldDismiss: true
+        )
+    }
+}
+
+private struct BookingSeerSummaryCard: View {
+    let seer: CustomerSeer
+    let selectedDateLabel: String
+    let selectedPeriod: BookingPeriod
+    let coinBalance: Int
+    let appLanguage: AppLanguage
+
+    var body: some View {
+        VStack(spacing: 12) {
+            CustomerSeerPhotoView(seer: seer, height: 132)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(seer.name)
+                            .font(.title3.bold())
+
+                        Text(seer.specialty)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    CoinMetaChip(title: appLanguage.text("\(coinBalance) coins", "\(coinBalance) เหรียญ"), color: .orange)
+                }
+
+                HStack(spacing: 8) {
+                    ConversationMetaChip(title: selectedDateLabel, color: .teal, icon: "calendar")
+                    ConversationMetaChip(title: selectedPeriod.timeRange, color: .indigo, icon: "clock.fill")
+                }
+            }
+        }
+        .padding(14)
+        .cardStyle(borderColor: seer.tint.opacity(0.34))
+    }
+}
+
+private struct BookingPeriodCard: View {
+    let period: BookingPeriod
+    let isSelected: Bool
+    let isBooked: Bool
+    let appLanguage: AppLanguage
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: period.icon)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(isBooked ? Color.secondary : Color.teal)
+
+                    Spacer(minLength: 8)
+
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : (isBooked ? "lock.fill" : "circle"))
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(isSelected ? Color.teal : Color.secondary)
+                }
+
+                Text(period.title(in: appLanguage))
+                    .font(.headline)
+                    .foregroundStyle(isBooked ? Color.secondary : Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(period.timeRange)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 5) {
+                    HoroCoinIcon(size: 16)
+
+                    Text(appLanguage.text("\(period.coinCost) coins", "\(period.coinCost) เหรียญ"))
+                        .font(.caption.weight(.bold))
+                }
+
+                Text(isBooked ? appLanguage.text("Booked", "ถูกจองแล้ว") : appLanguage.text("Available", "ว่าง"))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(isBooked ? .red : .green)
+            }
+            .frame(maxWidth: .infinity, minHeight: 148, alignment: .leading)
+            .padding(12)
+            .cardStyle(borderColor: isSelected ? Color.teal.opacity(0.7) : AppColors.border)
+            .opacity(isBooked ? 0.62 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(isBooked)
+        .accessibilityLabel("\(period.title(in: appLanguage)), \(period.timeRange)")
+    }
+}
+
+private struct BookedPeriodRow: View {
+    let period: BookingPeriod
+    let appLanguage: AppLanguage
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock.fill")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.red)
+                .frame(width: 32, height: 32)
+                .background(Color.red.opacity(0.12))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(period.title(in: appLanguage))
+                    .font(.subheadline.weight(.semibold))
+
+                Text(period.timeRange)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(appLanguage.text("Booked", "ถูกจองแล้ว"))
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(Color.red.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .padding(12)
+        .cardStyle(borderColor: Color.red.opacity(0.28))
+    }
+}
+
+private struct BookingNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let shouldDismiss: Bool
 }
 
 private struct SeerStyleRow: View {
@@ -3716,7 +4216,7 @@ private struct CustomerProfileSpaceView: View {
                     ProfilePhotoView(
                         profile: editableProfile,
                         size: 138,
-                        showsCameraBadge: true
+                        showsCameraBadge: false
                     )
 
                     VStack(spacing: 5) {
@@ -3727,10 +4227,7 @@ private struct CustomerProfileSpaceView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
-                        HStack(spacing: 8) {
-                            StatusBadge(title: appLanguage.text("Customer", "ลูกค้า"), color: .indigo)
-                            StatusBadge(title: profileDetails.memberTier, color: .teal)
-                        }
+                        StatusBadge(title: profileDetails.memberTier, color: .teal)
                         .padding(.top, 4)
                     }
                 }
@@ -3768,8 +4265,6 @@ private struct CustomerProfileSpaceView: View {
                     VStack(spacing: 0) {
                         ProfileDetailRow(icon: "bell.badge", title: appLanguage.text("Reading Alerts", "แจ้งเตือนคำทำนาย"), value: appLanguage.text("Enabled", "เปิดใช้งาน"), appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
-                        ProfileDetailRow(icon: "lock.shield", title: appLanguage.text("Role Access", "สิทธิ์บทบาท"), value: appLanguage.text("Customer", "ลูกค้า"), appLanguage: appLanguage)
-                        Divider().padding(.leading, 40)
                         AppearancePickerRow(selection: $appAppearance, appLanguage: appLanguage)
                         Divider().padding(.leading, 40)
                         LanguagePickerRow(selection: $appLanguage)
@@ -3790,6 +4285,7 @@ private struct CustomerProfileSpaceView: View {
                 NavigationLink {
                     ProfileEditorView(
                         profile: editableProfile,
+                        showsSeerFields: false,
                         appLanguage: appLanguage,
                         onSave: { editableProfile = $0 }
                     )
@@ -4481,7 +4977,16 @@ private struct DashboardPageView: View {
     let onDeleteRecord: (TestRecord) -> Void
     let appLanguage: AppLanguage
 
+    @State private var selectedRevenueFilter: SeerRevenueFilter = .daily
+
     private let conversations = ChatConversation.mockConversations
+    private let revenueEntries = SeerRevenueEntry.mockEntries
+
+    private var filteredRevenueEntries: [SeerRevenueEntry] {
+        revenueEntries
+            .filter { selectedRevenueFilter.includes($0.createdAt) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
 
     var body: some View {
         ScrollView {
@@ -4493,12 +4998,16 @@ private struct DashboardPageView: View {
                     onViewProfile: onViewProfile
                 )
 
-                RoleOverviewSection(activeRole: .seer, appLanguage: appLanguage)
-
                 OperationsMetricsGrid(
                     queueCount: conversations.count,
                     activeCount: activeCount,
                     completedCount: completedCount,
+                    appLanguage: appLanguage
+                )
+
+                SeerRevenueHistorySection(
+                    entries: filteredRevenueEntries,
+                    selectedFilter: $selectedRevenueFilter,
                     appLanguage: appLanguage
                 )
 
@@ -4627,6 +5136,247 @@ private struct MetricTile: View {
         .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
         .padding(12)
         .cardStyle()
+    }
+}
+
+private enum SeerRevenueFilter: String, CaseIterable, Identifiable {
+    case daily
+    case monthly
+    case yearly
+
+    var id: String { rawValue }
+
+    func title(in language: AppLanguage) -> String {
+        switch self {
+        case .daily:
+            return language.text("Daily", "รายวัน")
+        case .monthly:
+            return language.text("Monthly", "รายเดือน")
+        case .yearly:
+            return language.text("Yearly", "รายปี")
+        }
+    }
+
+    func subtitle(in language: AppLanguage) -> String {
+        switch self {
+        case .daily:
+            return language.text("Money received today", "ยอดรับวันนี้")
+        case .monthly:
+            return language.text("Money received this month", "ยอดรับเดือนนี้")
+        case .yearly:
+            return language.text("Money received this year", "ยอดรับปีนี้")
+        }
+    }
+
+    func includes(_ date: Date) -> Bool {
+        let calendar = Calendar.current
+
+        switch self {
+        case .daily:
+            return calendar.isDateInToday(date)
+        case .monthly:
+            return calendar.component(.year, from: date) == calendar.component(.year, from: Date())
+                && calendar.component(.month, from: date) == calendar.component(.month, from: Date())
+        case .yearly:
+            return calendar.component(.year, from: date) == calendar.component(.year, from: Date())
+        }
+    }
+}
+
+private enum SeerRevenueServiceType: String, CaseIterable, Identifiable {
+    case fifteenMinutes
+    case thirtyMinutes
+    case sixtyMinutes
+    case tarotFollowUp
+
+    var id: String { rawValue }
+
+    func title(in language: AppLanguage) -> String {
+        switch self {
+        case .fifteenMinutes:
+            return language.text("15 mins", "15 นาที")
+        case .thirtyMinutes:
+            return language.text("30 mins", "30 นาที")
+        case .sixtyMinutes:
+            return language.text("1 hr", "1 ชม.")
+        case .tarotFollowUp:
+            return language.text("Tarot follow-up", "ติดตามผลไพ่ทาโรต์")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .fifteenMinutes:
+            return "phone.fill"
+        case .thirtyMinutes:
+            return "phone.connection.fill"
+        case .sixtyMinutes:
+            return "phone.circle.fill"
+        case .tarotFollowUp:
+            return "rectangle.stack.fill"
+        }
+    }
+}
+
+private struct SeerRevenueEntry: Identifiable {
+    let id = UUID()
+    let customerName: String
+    let serviceType: SeerRevenueServiceType
+    let amountTHB: Int
+    let createdAt: Date
+
+    var amountLabel: String {
+        "฿\(NumberFormatter.localizedString(from: NSNumber(value: amountTHB), number: .decimal))"
+    }
+
+    static let mockEntries = [
+        SeerRevenueEntry(customerName: "Mali Chan", serviceType: .fifteenMinutes, amountTHB: 199, createdAt: Date()),
+        SeerRevenueEntry(customerName: "Narin K.", serviceType: .thirtyMinutes, amountTHB: 349, createdAt: makeDate(dayOffset: 0, hour: -2)),
+        SeerRevenueEntry(customerName: "June P.", serviceType: .tarotFollowUp, amountTHB: 249, createdAt: makeDate(dayOffset: -1)),
+        SeerRevenueEntry(customerName: "Benz R.", serviceType: .sixtyMinutes, amountTHB: 599, createdAt: makeDate(dayOffset: -7)),
+        SeerRevenueEntry(customerName: "Ploy S.", serviceType: .thirtyMinutes, amountTHB: 349, createdAt: makeDate(dayOffset: -14)),
+        SeerRevenueEntry(customerName: "Mint L.", serviceType: .fifteenMinutes, amountTHB: 199, createdAt: makeDate(monthOffset: -1)),
+        SeerRevenueEntry(customerName: "Aom T.", serviceType: .sixtyMinutes, amountTHB: 599, createdAt: makeDate(yearOffset: -1))
+    ]
+
+    private static func makeDate(dayOffset: Int = 0, monthOffset: Int = 0, yearOffset: Int = 0, hour: Int = 0) -> Date {
+        var components = DateComponents()
+        components.day = dayOffset
+        components.month = monthOffset
+        components.year = yearOffset
+        components.hour = hour
+        return Calendar.current.date(byAdding: components, to: Date()) ?? Date()
+    }
+}
+
+private struct SeerRevenueHistorySection: View {
+    let entries: [SeerRevenueEntry]
+    @Binding var selectedFilter: SeerRevenueFilter
+    let appLanguage: AppLanguage
+
+    private var totalAmount: Int {
+        entries.reduce(0) { $0 + $1.amountTHB }
+    }
+
+    private var totalAmountLabel: String {
+        "฿\(NumberFormatter.localizedString(from: NSNumber(value: totalAmount), number: .decimal))"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: appLanguage.text("Reading Revenue", "ยอดดูดวง"),
+                subtitle: selectedFilter.subtitle(in: appLanguage)
+            )
+
+            Picker(appLanguage.text("Revenue Filter", "ตัวกรองยอดดูดวง"), selection: $selectedFilter) {
+                ForEach(SeerRevenueFilter.allCases) { filter in
+                    Text(filter.title(in: appLanguage))
+                        .tag(filter)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack(spacing: 10) {
+                RevenueSummaryTile(
+                    title: appLanguage.text("Received", "ยอดรับ"),
+                    value: totalAmountLabel,
+                    icon: "banknote.fill",
+                    color: .green
+                )
+
+                RevenueSummaryTile(
+                    title: appLanguage.text("Services", "บริการ"),
+                    value: "\(entries.count)",
+                    icon: "list.bullet.rectangle.fill",
+                    color: .teal
+                )
+            }
+
+            if entries.isEmpty {
+                Text(appLanguage.text("No received money for this period yet.", "ยังไม่มียอดรับในช่วงเวลานี้"))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .cardStyle()
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(entries) { entry in
+                        SeerRevenueRow(entry: entry, appLanguage: appLanguage)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct RevenueSummaryTile: View {
+    let title: String
+    let value: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: icon)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(color)
+
+            Text(value)
+                .font(.title3.bold().monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .leading)
+        .padding(12)
+        .cardStyle(borderColor: color.opacity(0.28))
+    }
+}
+
+private struct SeerRevenueRow: View {
+    let entry: SeerRevenueEntry
+    let appLanguage: AppLanguage
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: entry.serviceType.icon)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.green)
+                .frame(width: 38, height: 38)
+                .background(Color.green.opacity(0.12))
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.serviceType.title(in: appLanguage))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(entry.customerName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(entry.amountLabel)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.green)
+                .lineLimit(1)
+        }
+        .padding(12)
+        .cardStyle(borderColor: Color.green.opacity(0.28))
     }
 }
 
@@ -4862,7 +5612,7 @@ private struct ProfilePageView: View {
             VStack(spacing: 18) {
                 ProfileHeroCard(profile: profileViewModel.profile, appLanguage: appLanguage)
 
-                RoleOverviewSection(activeRole: .seer, appLanguage: appLanguage)
+                ProfileSeerReputationSection(profile: profileViewModel.profile, appLanguage: appLanguage)
 
                 ProfileContactSection(
                     profile: profileViewModel.profile,
@@ -4912,33 +5662,223 @@ private struct ProfileHeroCard: View {
     let appLanguage: AppLanguage
 
     var body: some View {
-        VStack(spacing: 14) {
-            ProfilePhotoView(
-                profile: profile,
-                size: 138,
-                showsCameraBadge: true
-            )
+        VStack(spacing: 12) {
+            ProfileDisplayPictureCard(profile: profile, appLanguage: appLanguage)
 
-            VStack(spacing: 5) {
-                Text(profile.fullName)
-                    .font(.title2.bold())
-                    .multilineTextAlignment(.center)
+            VStack(spacing: 10) {
+                VStack(spacing: 5) {
+                    Text(profile.fullName)
+                        .font(.title2.bold())
+                        .multilineTextAlignment(.center)
 
-                Text(profile.role)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    Text(profile.location)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
 
                 HStack(spacing: 8) {
-                    StatusBadge(title: appLanguage.text("Seer", "หมอดู"), color: .teal)
                     StatusBadge(title: appLanguage.text("On Duty", "กำลังปฏิบัติงาน"), color: .green)
+                    ConversationMetaChip(
+                        title: appLanguage.text("\(profile.ratingLabel) rating", "คะแนน \(profile.ratingLabel)"),
+                        color: .yellow,
+                        icon: "star.fill"
+                    )
                 }
-                .padding(.top, 4)
             }
+            .frame(maxWidth: .infinity)
+            .padding(16)
+            .cardStyle()
+        }
+    }
+}
+
+private struct ProfileDisplayPictureCard: View {
+    let profile: UserProfile
+    let appLanguage: AppLanguage
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: profile.avatarStyle.colors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            Image(systemName: profile.avatarStyle.icon)
+                .font(.system(size: 92, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.30))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(profile.initials)
+                    .font(.largeTitle.bold())
+                    .foregroundStyle(.white)
+
+                Text(appLanguage.text("Display Picture", "รูปโปรไฟล์"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.86))
+            }
+            .padding(16)
         }
         .frame(maxWidth: .infinity)
-        .padding(22)
-        .cardStyle()
+        .frame(height: 210)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.28))
+        }
+        .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 4)
+    }
+}
+
+private struct ProfileSeerReputationSection: View {
+    let profile: UserProfile
+    let appLanguage: AppLanguage
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 128), spacing: 8)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(
+                title: appLanguage.text("Reviews & Style", "รีวิวและสไตล์"),
+                subtitle: appLanguage.text("Seer rating, personality traits, and skill types", "คะแนนรีวิว บุคลิก และประเภททักษะของหมอดู")
+            )
+
+            HStack(spacing: 10) {
+                ReputationSummaryTile(
+                    title: appLanguage.text("Rating", "คะแนน"),
+                    value: profile.ratingLabel,
+                    detail: appLanguage.text("from \(profile.reviewCount) reviews", "จาก \(profile.reviewCount) รีวิว"),
+                    icon: "star.fill",
+                    color: .yellow
+                )
+
+                ReputationSummaryTile(
+                    title: appLanguage.text("Skills", "ทักษะ"),
+                    value: "\(profile.seerSkills.count)",
+                    detail: appLanguage.text("selected types", "ประเภทที่เลือก"),
+                    icon: "sparkles",
+                    color: .teal
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(appLanguage.text("Personality Traits", "บุคลิกหมอดู"))
+                    .font(.subheadline.weight(.bold))
+
+                if profile.personalityTraits.isEmpty {
+                    EmptyProfileTagText(appLanguage: appLanguage)
+                } else {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                        ForEach(profile.personalityTraits) { trait in
+                            SeerAttributeChip(
+                                title: trait.title(in: appLanguage),
+                                icon: trait.icon,
+                                color: trait.color
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(14)
+            .cardStyle()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(appLanguage.text("Skill Types", "ประเภททักษะ"))
+                    .font(.subheadline.weight(.bold))
+
+                if profile.seerSkills.isEmpty {
+                    EmptyProfileTagText(appLanguage: appLanguage)
+                } else {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                        ForEach(profile.seerSkills) { skill in
+                            SeerAttributeChip(
+                                title: skill.title(in: appLanguage),
+                                icon: skill.icon,
+                                color: skill.color
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(14)
+            .cardStyle()
+        }
+    }
+}
+
+private struct ReputationSummaryTile: View {
+    let title: String
+    let value: String
+    let detail: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: icon)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(color)
+
+            Text(value)
+                .font(.title3.bold().monospacedDigit())
+                .foregroundStyle(.primary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.primary)
+
+                Text(detail)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+        .padding(12)
+        .cardStyle(borderColor: color.opacity(0.28))
+    }
+}
+
+private struct SeerAttributeChip: View {
+    let title: String
+    let icon: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.caption2.weight(.bold))
+
+            Text(title)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 9)
+        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+        .background(color.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct EmptyProfileTagText: View {
+    let appLanguage: AppLanguage
+
+    var body: some View {
+        Text(appLanguage.text("No selection yet.", "ยังไม่ได้เลือก"))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -5012,8 +5952,6 @@ private struct ProfileSettingsSection: View {
 
             VStack(spacing: 0) {
                 ProfileDetailRow(icon: "bell.badge", title: appLanguage.text("Queue Alerts", "แจ้งเตือนคิว"), value: appLanguage.text("Enabled", "เปิดใช้งาน"), appLanguage: appLanguage)
-                Divider().padding(.leading, 40)
-                ProfileDetailRow(icon: "lock.shield", title: appLanguage.text("Role Access", "สิทธิ์บทบาท"), value: appLanguage.text("Seer", "หมอดู"), appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
                 AppearancePickerRow(selection: $appAppearance, appLanguage: appLanguage)
                 Divider().padding(.leading, 40)
@@ -5112,6 +6050,7 @@ private struct ProfileLogoutButton: View {
 }
 
 private struct ProfileEditorView: View {
+    let showsSeerFields: Bool
     let appLanguage: AppLanguage
     let onSave: (UserProfile) -> Void
 
@@ -5122,6 +6061,10 @@ private struct ProfileEditorView: View {
     @State private var phone: String
     @State private var location: String
     @State private var avatarStyle: ProfileAvatarStyle
+    @State private var reviewRating: Double
+    @State private var reviewCount: Int
+    @State private var personalityTraits: [SeerPersonalityTrait]
+    @State private var seerSkills: [SeerSkillType]
 
     private var canSave: Bool {
         !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -5134,11 +6077,21 @@ private struct ProfileEditorView: View {
             email: email,
             phone: phone,
             location: location,
-            avatarStyle: avatarStyle
+            avatarStyle: avatarStyle,
+            reviewRating: reviewRating,
+            reviewCount: reviewCount,
+            personalityTraits: personalityTraits,
+            seerSkills: seerSkills
         )
     }
 
-    init(profile: UserProfile, appLanguage: AppLanguage, onSave: @escaping (UserProfile) -> Void) {
+    init(
+        profile: UserProfile,
+        showsSeerFields: Bool = true,
+        appLanguage: AppLanguage,
+        onSave: @escaping (UserProfile) -> Void
+    ) {
+        self.showsSeerFields = showsSeerFields
         self.appLanguage = appLanguage
         self.onSave = onSave
         _fullName = State(initialValue: profile.fullName)
@@ -5147,6 +6100,10 @@ private struct ProfileEditorView: View {
         _phone = State(initialValue: profile.phone)
         _location = State(initialValue: profile.location)
         _avatarStyle = State(initialValue: profile.avatarStyle)
+        _reviewRating = State(initialValue: profile.reviewRating)
+        _reviewCount = State(initialValue: profile.reviewCount)
+        _personalityTraits = State(initialValue: profile.personalityTraits)
+        _seerSkills = State(initialValue: profile.seerSkills)
     }
 
     var body: some View {
@@ -5169,9 +6126,6 @@ private struct ProfileEditorView: View {
             Section(appLanguage.text("Personal", "ข้อมูลส่วนตัว")) {
                 TextField(appLanguage.text("Full Name", "ชื่อ-นามสกุล"), text: $fullName)
                     .textInputAutocapitalization(.words)
-
-                TextField(appLanguage.text("Role", "บทบาท"), text: $role)
-                    .textInputAutocapitalization(.words)
             }
 
             Section(appLanguage.text("Contact", "ติดต่อ")) {
@@ -5185,6 +6139,44 @@ private struct ProfileEditorView: View {
 
                 TextField(appLanguage.text("Location", "ที่อยู่"), text: $location)
                     .textInputAutocapitalization(.words)
+            }
+
+            if showsSeerFields {
+                Section(appLanguage.text("Reviews", "รีวิว")) {
+                    Stepper(value: $reviewRating, in: 0...5, step: 0.1) {
+                        HStack {
+                            Label(appLanguage.text("Rating", "คะแนน"), systemImage: "star.fill")
+                            Spacer()
+                            Text(reviewRating.formatted(.number.precision(.fractionLength(1))))
+                                .fontWeight(.semibold)
+                        }
+                    }
+
+                    Stepper(value: $reviewCount, in: 0...9999, step: 1) {
+                        HStack {
+                            Label(appLanguage.text("Review Count", "จำนวนรีวิว"), systemImage: "text.bubble.fill")
+                            Spacer()
+                            Text("\(reviewCount)")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                }
+
+                Section(appLanguage.text("Personality Traits", "บุคลิกหมอดู")) {
+                    ForEach(SeerPersonalityTrait.allCases) { trait in
+                        Toggle(isOn: personalityTraitBinding(for: trait)) {
+                            Label(trait.title(in: appLanguage), systemImage: trait.icon)
+                        }
+                    }
+                }
+
+                Section(appLanguage.text("Skill Types", "ประเภททักษะ")) {
+                    ForEach(SeerSkillType.allCases) { skill in
+                        Toggle(isOn: seerSkillBinding(for: skill)) {
+                            Label(skill.title(in: appLanguage), systemImage: skill.icon)
+                        }
+                    }
+                }
             }
         }
         .navigationTitle(appLanguage.editProfileTitle)
@@ -5204,6 +6196,44 @@ private struct ProfileEditorView: View {
                 .disabled(!canSave)
             }
         }
+    }
+
+    private func personalityTraitBinding(for trait: SeerPersonalityTrait) -> Binding<Bool> {
+        Binding(
+            get: { personalityTraits.contains(trait) },
+            set: { isSelected in
+                var nextTraits = personalityTraits
+
+                if isSelected {
+                    if !nextTraits.contains(trait) {
+                        nextTraits.append(trait)
+                    }
+                } else {
+                    nextTraits.removeAll { $0 == trait }
+                }
+
+                personalityTraits = nextTraits
+            }
+        )
+    }
+
+    private func seerSkillBinding(for skill: SeerSkillType) -> Binding<Bool> {
+        Binding(
+            get: { seerSkills.contains(skill) },
+            set: { isSelected in
+                var nextSkills = seerSkills
+
+                if isSelected {
+                    if !nextSkills.contains(skill) {
+                        nextSkills.append(skill)
+                    }
+                } else {
+                    nextSkills.removeAll { $0 == skill }
+                }
+
+                seerSkills = nextSkills
+            }
+        )
     }
 }
 
