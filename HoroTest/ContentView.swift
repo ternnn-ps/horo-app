@@ -6066,6 +6066,10 @@ private struct ProfileEditorView: View {
     @State private var personalityTraits: [SeerPersonalityTrait]
     @State private var seerSkills: [SeerSkillType]
 
+    private let chipColumns = [
+        GridItem(.adaptive(minimum: 132), spacing: 8)
+    ]
+
     private var canSave: Bool {
         !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -6163,19 +6167,41 @@ private struct ProfileEditorView: View {
                 }
 
                 Section(appLanguage.text("Personality Traits", "บุคลิกหมอดู")) {
-                    ForEach(SeerPersonalityTrait.allCases) { trait in
-                        Toggle(isOn: personalityTraitBinding(for: trait)) {
-                            Label(trait.title(in: appLanguage), systemImage: trait.icon)
+                    LazyVGrid(columns: chipColumns, alignment: .leading, spacing: 8) {
+                        ForEach(SeerPersonalityTrait.allCases) { trait in
+                            Button {
+                                togglePersonalityTrait(trait)
+                            } label: {
+                                SelectableProfileChip(
+                                    title: trait.title(in: appLanguage),
+                                    icon: trait.icon,
+                                    color: trait.color,
+                                    isSelected: personalityTraits.contains(trait)
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
+                    .padding(.vertical, 4)
                 }
 
                 Section(appLanguage.text("Skill Types", "ประเภททักษะ")) {
-                    ForEach(SeerSkillType.allCases) { skill in
-                        Toggle(isOn: seerSkillBinding(for: skill)) {
-                            Label(skill.title(in: appLanguage), systemImage: skill.icon)
+                    LazyVGrid(columns: chipColumns, alignment: .leading, spacing: 8) {
+                        ForEach(SeerSkillType.allCases) { skill in
+                            Button {
+                                toggleSeerSkill(skill)
+                            } label: {
+                                SelectableProfileChip(
+                                    title: skill.title(in: appLanguage),
+                                    icon: skill.icon,
+                                    color: skill.color,
+                                    isSelected: seerSkills.contains(skill)
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
+                    .padding(.vertical, 4)
                 }
             }
         }
@@ -6198,42 +6224,48 @@ private struct ProfileEditorView: View {
         }
     }
 
-    private func personalityTraitBinding(for trait: SeerPersonalityTrait) -> Binding<Bool> {
-        Binding(
-            get: { personalityTraits.contains(trait) },
-            set: { isSelected in
-                var nextTraits = personalityTraits
-
-                if isSelected {
-                    if !nextTraits.contains(trait) {
-                        nextTraits.append(trait)
-                    }
-                } else {
-                    nextTraits.removeAll { $0 == trait }
-                }
-
-                personalityTraits = nextTraits
-            }
-        )
+    private func togglePersonalityTrait(_ trait: SeerPersonalityTrait) {
+        if personalityTraits.contains(trait) {
+            personalityTraits.removeAll { $0 == trait }
+        } else {
+            personalityTraits.append(trait)
+        }
     }
 
-    private func seerSkillBinding(for skill: SeerSkillType) -> Binding<Bool> {
-        Binding(
-            get: { seerSkills.contains(skill) },
-            set: { isSelected in
-                var nextSkills = seerSkills
+    private func toggleSeerSkill(_ skill: SeerSkillType) {
+        if seerSkills.contains(skill) {
+            seerSkills.removeAll { $0 == skill }
+        } else {
+            seerSkills.append(skill)
+        }
+    }
+}
 
-                if isSelected {
-                    if !nextSkills.contains(skill) {
-                        nextSkills.append(skill)
-                    }
-                } else {
-                    nextSkills.removeAll { $0 == skill }
-                }
+private struct SelectableProfileChip: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let isSelected: Bool
 
-                seerSkills = nextSkills
-            }
-        )
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : icon)
+                .font(.caption.weight(.bold))
+
+            Text(title)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .foregroundStyle(isSelected ? color : Color.secondary)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+        .background(isSelected ? color.opacity(0.14) : AppColors.elevatedSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(isSelected ? color.opacity(0.64) : AppColors.border)
+        }
     }
 }
 
